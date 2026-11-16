@@ -1,0 +1,556 @@
+name: Build unsigned IPA
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Create project files
+        run: |
+          mkdir -p Sources
+          cat > project.yml <<'EOF_PROJ'
+          name: SiteBook
+          options: {bundleIdPrefix: com.sitebook}
+          targets:
+            SiteBook:
+              type: application
+              platform: iOS
+              deploymentTarget: "16.0"
+              sources: [Sources]
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.sitebook.app
+                  GENERATE_INFOPLIST_FILE: YES
+                  INFOPLIST_KEY_UILaunchScreen_Generation: YES
+                  INFOPLIST_KEY_CFBundleDisplayName: SiteBook
+                  MARKETING_VERSION: 1.0
+                  CURRENT_PROJECT_VERSION: 1
+          EOF_PROJ
+          cat > Sources/App.swift <<'EOF_SWIFT'
+          import SwiftUI
+
+          struct Topic: Codable, Identifiable {
+              var id: Int
+              var en: String
+              var bn: String
+              var what: String?
+              var why: String?
+              var uses: String?
+              var steps: [String]?
+              var ways: [String]?
+              var sources: [String]?
+              var examples: [String]?
+          }
+
+          func loadTopics() -> [Topic] {
+              guard let u = Bundle.main.url(forResource: "topics", withExtension: "json"),
+                    let d = try? Data(contentsOf: u),
+                    let t = try? JSONDecoder().decode([Topic].self, from: d) else { return [] }
+              return t
+          }
+
+          @main struct SiteBookApp: App {
+              var body: some Scene { WindowGroup { RootView() } }
+          }
+
+          struct RootView: View {
+              let topics = loadTopics()
+              @State private var sel = 1
+              @State private var menu = false
+              @State private var q = ""
+              var filtered: [Topic] {
+                  let s = q.lowercased()
+                  if s.isEmpty { return topics }
+                  return topics.filter { t in
+                      let all = [t.en, t.bn, t.what ?? "", t.why ?? "", t.uses ?? ""] + (t.steps ?? []) + (t.ways ?? []) + (t.sources ?? []) + (t.examples ?? [])
+                      return all.joined(separator: " ").lowercased().contains(s)
+                  }
+              }
+              var current: Topic? { topics.first { $0.id == sel } }
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          if let t = current { TopicView(t: t).padding() }
+                      }
+                      .navigationTitle(current?.en ?? "SiteBook")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button { menu = true } label: { Image(systemName: "line.3.horizontal") }
+                          }
+                      }
+                      .sheet(isPresented: $menu) {
+                          NavigationStack {
+                              List(filtered) { t in
+                                  Button { sel = t.id; menu = false } label: {
+                                      VStack(alignment: .leading) {
+                                          Text("\(t.id). \(t.en)").font(.headline)
+                                          Text(t.bn).font(.subheadline).foregroundColor(.secondary)
+                                      }
+                                  }
+                              }
+                              .navigationTitle("সূচিপত্র / Contents")
+                              .searchable(text: $q, prompt: "Search / খুঁজুন")
+                          }
+                      }
+                  }
+              }
+          }
+
+          struct TopicView: View {
+              let t: Topic
+              func sec(_ title: String, _ items: [String]?, numbered: Bool = false) -> some View {
+                  Group {
+                      if let items = items, !items.isEmpty {
+                          VStack(alignment: .leading, spacing: 6) {
+                              Text(title).font(.headline).foregroundColor(.blue)
+                              ForEach(Array(items.enumerated()), id: \.offset) { i, s in
+                                  Text(numbered ? "\(i+1). \(s)" : "• \(s)")
+                              }
+                          }
+                      }
+                  }
+              }
+              var body: some View {
+                  VStack(alignment: .leading, spacing: 16) {
+                      Text(t.en).font(.title2).bold()
+                      Text(t.bn).font(.title3).foregroundColor(.secondary)
+                      sec("এটা কী? (What)", t.what.map { [$0] })
+                      sec("কী করে / ব্যবহার (Use)", t.uses.map { [$0] })
+                      sec("কেন করা হয়? (Why)", t.why.map { [$0] })
+                      sec("ধাপসমূহ (Steps)", t.steps, numbered: true)
+                      sec("পদ্ধতি (Ways)", t.ways)
+                      sec("সোর্স (Sources)", t.sources)
+                      sec("উদাহরণ (Examples)", t.examples, numbered: true)
+                      if t.what == nil {
+                          Text("বিস্তারিত তথ্য শিগগিরই যোগ হবে।").italic().foregroundColor(.secondary)
+                      }
+                  }.frame(maxWidth: .infinity, alignment: .leading)
+              }
+          }
+          EOF_SWIFT
+          cat > Sources/topics.json <<'EOF_JSON'
+          [
+           {
+            "id": 1,
+            "en": "Soil Test (N-value, Soil Strength)",
+            "bn": "মাটি পরীক্ষা (এন-ভ্যালু, মাটির শক্তি)",
+            "what": "নির্মাণের আগে মাটির ধরন, বহন ক্ষমতা ও স্তর জানার পরীক্ষা। SPT (Standard Penetration Test) এ প্রতি ৩০ সেমি ঢুকাতে হাতুড়ির আঘাত সংখ্যাই N-value।",
+            "uses": "ফাউন্ডেশনের ধরন (শ্যালো/পাইল), গভীরতা ও Allowable Bearing Capacity নির্ধারণ।",
+            "why": "দুর্বল মাটিতে ভুল ফাউন্ডেশন করলে বিল্ডিং বসে যেতে বা ফাটতে পারে। স্ট্রাকচারাল ডিজাইনের প্রথম ইনপুট এটাই।",
+            "steps": [
+             "সাইটে বোরহোল পয়েন্ট ঠিক করা (বিল্ডিং কর্নার ও মাঝখানে)",
+             "বোরিং মেশিন বসিয়ে ১.৫ মিটার পরপর SPT করা",
+             "প্রতিবার ৪৫ সেমি ঢুকিয়ে শেষ ৩০ সেমির আঘাত গোনা (N)",
+             "স্যাম্পল (Disturbed/Undisturbed) ল্যাবে পাঠানো",
+             "বোরলগ ও জিওটেকনিক্যাল রিপোর্ট নেওয়া"
+            ],
+            "ways": [
+             "SPT (Standard Penetration Test)",
+             "CPT (Cone Penetration Test)",
+             "Plate Load Test",
+             "Lab Test: Grain Size, Atterberg Limits, Consolidation"
+            ],
+            "sources": [
+             "BNBC (Bangladesh National Building Code), Part 6",
+             "ASTM D1586 (SPT)",
+             "স্থানীয় জিওটেক কোম্পানি, BUET/DU সয়েল ল্যাব"
+            ],
+            "examples": [
+             "১২ তলা বিল্ডিং: N=৫ (নরম কাদা) পাওয়া গেলে পাইল ফাউন্ডেশন লাগবে",
+             "৪ তলা বাড়ি: ৬ মিটার গভীরে N=২০ (শক্ত বালু) হলে Mat/Raft ফাউন্ডেশনও চলতে পারে"
+            ]
+           },
+           {
+            "id": 2,
+            "en": "Survey Drawing of Project Periphery",
+            "bn": "প্রজেক্টের সীমানা জরিপ নকশা",
+            "what": "প্রজেক্টের জমির সীমানা, দৈর্ঘ্য-প্রস্থ, লেভেল, রাস্তা ও আশপাশের স্থাপনা মাপার নকশা।",
+            "uses": "জমির আসল মাপ, বাউন্ডারি পিলার ও ভূমির উঁচু-নিচু জানা। Master Plan এর ভিত্তি।",
+            "why": "সীমানা ভুল হলে দখল বা আইনি জটিলতা হয়। লেভেল ভুল হলে ফিলিং ও ড্রেনেজ খরচ বেড়ে যায়।",
+            "steps": [
+             "দলিল ও খতিয়ান অনুযায়ী জমি চিহ্নিত করা",
+             "Total Station/GPS দিয়ে বাউন্ডারি পয়েন্ট মাপা",
+             "Spot Level ও Contour নেওয়া",
+             "CAD এ নকশা আঁকা",
+             "মালিক/কনসালট্যান্ট দিয়ে যাচাই"
+            ],
+            "ways": [
+             "Total Station Survey",
+             "GPS/DGPS Survey",
+             "Topographic Survey",
+             "Chain/Tape Survey"
+            ],
+            "sources": [
+             "ভূমি অফিস (খতিয়ান/মৌজা ম্যাপ)",
+             "লাইসেন্সপ্রাপ্ত সার্ভেয়ার",
+             "RAJUK/স্থানীয় কর্তৃপক্ষ"
+            ],
+            "examples": [
+             "বসুন্ধরার ৫ বিঘা প্লটের বাউন্ডারি ও রোডসাইড লেভেল সার্ভে",
+             "নিচু জমিতে Contour দেখে কত ফুট বালু ফিলিং লাগবে তা হিসাব"
+            ]
+           },
+           {
+            "id": 3,
+            "en": "Electrical Connection & Meter",
+            "bn": "বৈদ্যুতিক সংযোগ ও মিটার"
+           },
+           {
+            "id": 4,
+            "en": "Water Supply (WASA & Deep Tube-wells)",
+            "bn": "পানি সরবরাহ (ওয়াসা ও গভীর নলকূপ)"
+           },
+           {
+            "id": 5,
+            "en": "Gas Line",
+            "bn": "গ্যাস লাইন"
+           },
+           {
+            "id": 6,
+            "en": "Master Plan (Full Project 2D)",
+            "bn": "মাস্টার প্ল্যান (পুরো প্রজেক্টের ২ডি নকশা)"
+           },
+           {
+            "id": 7,
+            "en": "Architectural Plan",
+            "bn": "স্থাপত্য নকশা"
+           },
+           {
+            "id": 8,
+            "en": "Buildings Layout",
+            "bn": "বিল্ডিং লেআউট"
+           },
+           {
+            "id": 9,
+            "en": "Structural Drawing",
+            "bn": "স্ট্রাকচারাল ড্রয়িং"
+           },
+           {
+            "id": 10,
+            "en": "Working Drawing (Ar.)",
+            "bn": "ওয়ার্কিং ড্রয়িং (আর্কিটেকচার)"
+           },
+           {
+            "id": 11,
+            "en": "Electrical Drawing",
+            "bn": "ইলেকট্রিক্যাল ড্রয়িং"
+           },
+           {
+            "id": 12,
+            "en": "Plumbing & Sanitary Drawing",
+            "bn": "প্লাম্বিং ও স্যানিটারি ড্রয়িং"
+           },
+           {
+            "id": 13,
+            "en": "Sewerage System & Drainage Line",
+            "bn": "পয়ঃনিষ্কাশন ও ড্রেনেজ লাইন"
+           },
+           {
+            "id": 14,
+            "en": "WTP, STP, ETP Drawing",
+            "bn": "পানি, পয়ঃ ও বর্জ্য শোধনাগার ড্রয়িং"
+           },
+           {
+            "id": 15,
+            "en": "HVAC Drawing",
+            "bn": "এইচভিএসি (তাপ, বায়ু চলাচল ও শীতাতপ) ড্রয়িং"
+           },
+           {
+            "id": 16,
+            "en": "Firefighting & Detection System Drawing",
+            "bn": "অগ্নি নির্বাপণ ও শনাক্তকরণ ড্রয়িং"
+           },
+           {
+            "id": 17,
+            "en": "3D Model",
+            "bn": "থ্রিডি মডেল"
+           },
+           {
+            "id": 18,
+            "en": "Animation Video",
+            "bn": "অ্যানিমেশন ভিডিও"
+           },
+           {
+            "id": 19,
+            "en": "Elevation of Buildings",
+            "bn": "বিল্ডিংয়ের এলিভেশন"
+           },
+           {
+            "id": 20,
+            "en": "Section of Buildings",
+            "bn": "বিল্ডিংয়ের সেকশন"
+           },
+           {
+            "id": 21,
+            "en": "Details of Working Section (Daily Report)",
+            "bn": "কাজের সেকশনের বিস্তারিত (দৈনিক রিপোর্ট)"
+           },
+           {
+            "id": 22,
+            "en": "Contractor Selection",
+            "bn": "ঠিকাদার নির্বাচন"
+           },
+           {
+            "id": 23,
+            "en": "Materials Supply (Vendors)",
+            "bn": "মালামাল সরবরাহ (ভেন্ডর)"
+           },
+           {
+            "id": 24,
+            "en": "Coordination",
+            "bn": "সমন্বয়"
+           },
+           {
+            "id": 25,
+            "en": "Project Management",
+            "bn": "প্রজেক্ট ম্যানেজমেন্ট"
+           },
+           {
+            "id": 26,
+            "en": "Organogram",
+            "bn": "অর্গানোগ্রাম"
+           },
+           {
+            "id": 27,
+            "en": "Staff List",
+            "bn": "স্টাফ তালিকা"
+           },
+           {
+            "id": 28,
+            "en": "Work Schedule",
+            "bn": "কাজের সময়সূচি"
+           },
+           {
+            "id": 29,
+            "en": "Bar Chart",
+            "bn": "বার চার্ট"
+           },
+           {
+            "id": 30,
+            "en": "Gantt Chart",
+            "bn": "গ্যান্ট চার্ট"
+           },
+           {
+            "id": 31,
+            "en": "CPM (Critical Path Method)",
+            "bn": "সিপিএম (ক্রিটিক্যাল পাথ মেথড)"
+           },
+           {
+            "id": 32,
+            "en": "Work Progress Report",
+            "bn": "কাজের অগ্রগতি প্রতিবেদন"
+           },
+           {
+            "id": 33,
+            "en": "PowerPoint Presentation",
+            "bn": "পাওয়ারপয়েন্ট উপস্থাপনা"
+           },
+           {
+            "id": 34,
+            "en": "Building Maintenance",
+            "bn": "বিল্ডিং রক্ষণাবেক্ষণ"
+           },
+           {
+            "id": 35,
+            "en": "Finishing Materials Specifications",
+            "bn": "ফিনিশিং মালামালের স্পেসিফিকেশন"
+           },
+           {
+            "id": 36,
+            "en": "Finishing Work Vendors",
+            "bn": "ফিনিশিং কাজের ভেন্ডর"
+           },
+           {
+            "id": 37,
+            "en": "QC of Materials",
+            "bn": "মালামালের কোয়ালিটি কন্ট্রোল"
+           },
+           {
+            "id": 38,
+            "en": "Daily Labors",
+            "bn": "দৈনিক শ্রমিক"
+           },
+           {
+            "id": 39,
+            "en": "Construction Equipment",
+            "bn": "নির্মাণ যন্ত্রপাতি"
+           },
+           {
+            "id": 40,
+            "en": "QC Instruments",
+            "bn": "কিউসি যন্ত্রপাতি"
+           },
+           {
+            "id": 41,
+            "en": "Testing of Materials",
+            "bn": "মালামাল পরীক্ষা"
+           },
+           {
+            "id": 42,
+            "en": "Field Test",
+            "bn": "ফিল্ড টেস্ট"
+           },
+           {
+            "id": 43,
+            "en": "Comparative Statement (CS)",
+            "bn": "তুলনামূলক বিবরণী",
+            "what": "চালান হলো সরবরাহকারীর দেওয়া ডেলিভারি রসিদ, যাতে গাড়িতে কী মাল ও কতটুকু এসেছে লেখা থাকে।",
+            "uses": "সাইটে মাল রিসিভ করে পরিমাণ ও মান মেলানো।",
+            "why": "কম/ভুল মাল আসা ঠেকাতে এবং বিল পাসের প্রমাণ রাখতে।",
+            "steps": [
+             "গাড়ি গেটে এলে চালান ও PO মিলিয়ে দেখা",
+             "মাল গুনে/ওজন করে পরিমাণ যাচাই",
+             "মান পরীক্ষা (QC)",
+             "স্টোর কিপার রিসিভ সই দেয়",
+             "রেজিস্টারে এন্ট্রি ও বিলের সঙ্গে সংযুক্তি"
+            ],
+            "ways": [
+             "ওজন ব্রিজ",
+             "গণনা/মাপ",
+             "Photo Evidence"
+            ],
+            "sources": [
+             "ভেন্ডরের চালান বই",
+             "Store Received Register"
+            ],
+            "examples": [
+             "রডের চালানে ৩০ টন লেখা, ওজনে ২৯.৬ টন হলে নোট করে জানানো",
+             "ইটের চালানে ১০,০০০ পিস, গুনে ৯,৮০০ হলে ঘাটতি রিপোর্ট"
+            ]
+           },
+           {
+            "id": 44,
+            "en": "WO (Work Order)",
+            "bn": "ওয়ার্ক অর্ডার",
+            "what": "PR (Purchase Requisition) হলো সাইট থেকে কোনো মালামাল কেনার জন্য লিখিত আবেদন।",
+            "uses": "কী, কতটুকু, কবে লাগবে তা হেড অফিস/পারচেজ বিভাগকে জানানো।",
+            "why": "অনুমোদন ছাড়া কেনাকাটা রোধ ও খরচের হিসাব রাখার জন্য।",
+            "steps": [
+             "স্টোর কিপার/ইঞ্জিনিয়ার স্টক ও চাহিদা যাচাই করে",
+             "PR ফর্মে আইটেম, পরিমাণ, স্পেসিফিকেশন, প্রয়োজনের তারিখ লেখে",
+             "সাইট ইনচার্জ অনুমোদন দেয়",
+             "হেড অফিসে পাঠানো হয়",
+             "PR থেকে CS এবং পরে PO তৈরি হয়"
+            ],
+            "ways": [
+             "কাগজের ফর্ম",
+             "এক্সেল/ERP সফটওয়্যার"
+            ],
+            "sources": [
+             "কোম্পানির স্ট্যান্ডার্ড PR ফর্ম",
+             "BOQ ও মাসিক Material Schedule"
+            ],
+            "examples": [
+             "৫০০ ব্যাগ সিমেন্ট (৫ দিনের মধ্যে) এর PR",
+             "৩৬ টন ১০ মিমি রড, Grade 60 এর PR"
+            ]
+           },
+           {
+            "id": 45,
+            "en": "PO (Purchase Order)",
+            "bn": "পারচেজ অর্ডার"
+           },
+           {
+            "id": 46,
+            "en": "Chalan",
+            "bn": "চালান"
+           },
+           {
+            "id": 47,
+            "en": "PR (Purchase Requisition)",
+            "bn": "পারচেজ রিকুইজিশন"
+           },
+           {
+            "id": 48,
+            "en": "SR",
+            "bn": "এসআর"
+           },
+           {
+            "id": 49,
+            "en": "Gate Pass",
+            "bn": "গেট পাস"
+           },
+           {
+            "id": 50,
+            "en": "RMC Schedule (Ready Mix Concrete)",
+            "bn": "আরএমসি সময়সূচি"
+           },
+           {
+            "id": 51,
+            "en": "Batching Plant Capacity",
+            "bn": "ব্যাচিং প্লান্টের ক্ষমতা"
+           },
+           {
+            "id": 52,
+            "en": "Transit Mixer Capacity",
+            "bn": "ট্রানজিট মিক্সারের ক্ষমতা"
+           },
+           {
+            "id": 53,
+            "en": "Land Pump Capacity",
+            "bn": "ল্যান্ড পাম্পের ক্ষমতা"
+           },
+           {
+            "id": 54,
+            "en": "Boom Pump Capacity",
+            "bn": "বুম পাম্পের ক্ষমতা"
+           },
+           {
+            "id": 55,
+            "en": "Capacity of Crane",
+            "bn": "ক্রেনের ক্ষমতা"
+           },
+           {
+            "id": 56,
+            "en": "Capacity of Excavator, Dump Truck, Pay Loader",
+            "bn": "এক্সকাভেটর, ডাম্প ট্রাক, পে-লোডারের ক্ষমতা"
+           },
+           {
+            "id": 57,
+            "en": "Compaction Method",
+            "bn": "কমপ্যাকশন পদ্ধতি"
+           },
+           {
+            "id": 58,
+            "en": "Roller Compactors",
+            "bn": "রোলার কমপ্যাক্টর"
+           },
+           {
+            "id": 59,
+            "en": "Consultants",
+            "bn": "কনসালট্যান্ট"
+           },
+           {
+            "id": 60,
+            "en": "In-house Team",
+            "bn": "ইন-হাউস টিম"
+           },
+           {
+            "id": 61,
+            "en": "Project Team",
+            "bn": "প্রজেক্ট টিম"
+           },
+           {
+            "id": 62,
+            "en": "Head Office Team",
+            "bn": "হেড অফিস টিম"
+           },
+           {
+            "id": 63,
+            "en": "Project Director",
+            "bn": "প্রজেক্ট ডিরেক্টর"
+           }
+          ]
+          EOF_JSON
+      - name: Build
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -project SiteBook.xcodeproj -scheme SiteBook -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          mkdir Payload
+          cp -r build/Build/Products/Release-iphoneos/SiteBook.app Payload/
+          zip -r SiteBook.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SiteBook-ipa
+          path: SiteBook.ipa
