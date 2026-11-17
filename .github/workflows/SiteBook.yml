@@ -21,14 +21,14 @@ jobs:
                   PRODUCT_BUNDLE_IDENTIFIER: com.sitebook.app
                   GENERATE_INFOPLIST_FILE: YES
                   INFOPLIST_KEY_UILaunchScreen_Generation: YES
+                  INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
                   INFOPLIST_KEY_CFBundleDisplayName: SiteBook
-                  MARKETING_VERSION: 2.0
-                  CURRENT_PROJECT_VERSION: 1
+                  MARKETING_VERSION: "1.0"
+                  CURRENT_PROJECT_VERSION: "1"
           EOF_PROJ
           cat > Sources/App.swift <<'EOF_SWIFT'
           import SwiftUI
 
-          // MARK: - Model
           struct Topic: Codable, Identifiable, Hashable {
               var id: Int
               var en: String
@@ -41,1835 +41,437 @@ jobs:
               var ways: [String]?
               var sources: [String]?
               var examples: [String]?
-              var keyPoints: [String]?
               var mistakes: [String]?
+              var checklist: [String]?
               var tips: [String]?
-              var duration: String?
+              var risks: [String]?
+
+              var haystack: String {
+                  let all = [en, bn, what ?? "", why ?? "", uses ?? ""]
+                      + (steps ?? []) + (ways ?? []) + (sources ?? []) + (examples ?? [])
+                      + (mistakes ?? []) + (tips ?? []) + (risks ?? []) + (checklist ?? [])
+                  return all.joined(separator: " ").lowercased()
+              }
+              var total: Int {
+                  (steps?.count ?? 0) + (ways?.count ?? 0) + (sources?.count ?? 0) + (examples?.count ?? 0)
+                  + (mistakes?.count ?? 0) + (tips?.count ?? 0) + (risks?.count ?? 0) + (checklist?.count ?? 0)
+              }
           }
 
           func loadTopics() -> [Topic] {
               guard let u = Bundle.main.url(forResource: "topics", withExtension: "json"),
                     let d = try? Data(contentsOf: u),
-                    let t = try? JSONDecoder().decode([Topic].self, from: d) else { return [] }
+                    var t = try? JSONDecoder().decode([Topic].self, from: d) else { return [] }
+              // Merge optional extras.json: { "1": { "tips": [], "mistakes": [], "risks": [], "checklist": [] } }
+              if let eu = Bundle.main.url(forResource: "extras", withExtension: "json"),
+                 let ed = try? Data(contentsOf: eu),
+                 let ex = try? JSONDecoder().decode([String: [String: [String]]].self, from: ed) {
+                  for i in t.indices {
+                      if let e = ex["\(t[i].id)"] {
+                          t[i].tips = e["tips"] ?? t[i].tips
+                          t[i].mistakes = e["mistakes"] ?? t[i].mistakes
+                          t[i].risks = e["risks"] ?? t[i].risks
+                          t[i].checklist = e["checklist"] ?? t[i].checklist
+                      }
+                  }
+              }
               return t
           }
 
-          // MARK: - Phase Metadata
-          struct PhaseInfo {
-              let title: String
-              let icon: String
-              let color: Color
-              let gradient: [Color]
-          }
+          final class Store: ObservableObject {
+              @Published var topics: [Topic] = loadTopics()
+              @Published var favs: Set<Int> { didSet { UserDefaults.standard.set(Array(favs), forKey: "favs") } }
+              @Published var done: Set<Int> { didSet { UserDefaults.standard.set(Array(done), forKey: "done") } }
+              @Published var notes: [String: String] { didSet { UserDefaults.standard.set(notes, forKey: "notes") } }
 
-          func phaseInfo(_ name: String?) -> PhaseInfo {
-              switch name ?? "" {
-              case "১. সাইট অনুসন্ধান":
-                  return PhaseInfo(title: "সাইট অনুসন্ধান", icon: "binoculars.fill",
-                                  color: Color(red: 0.55, green: 0.35, blue: 0.15),
-                                  gradient: [Color(red: 0.45, green: 0.28, blue: 0.10), Color(red: 0.78, green: 0.55, blue: 0.30)])
-              case "২. ডিজাইন ও পরিকল্পনা":
-                  return PhaseInfo(title: "ডিজাইন ও পরিকল্পনা", icon: "pencil.and.ruler.fill",
-                                  color: Color(red: 0.15, green: 0.45, blue: 0.85),
-                                  gradient: [Color(red: 0.10, green: 0.35, blue: 0.75), Color(red: 0.35, green: 0.65, blue: 0.95)])
-              case "৩. টিম ও ব্যবস্থাপনা":
-                  return PhaseInfo(title: "টিম ও ব্যবস্থাপনা", icon: "person.3.fill",
-                                  color: Color(red: 0.55, green: 0.25, blue: 0.75),
-                                  gradient: [Color(red: 0.42, green: 0.18, blue: 0.65), Color(red: 0.75, green: 0.45, blue: 0.95)])
-              case "৪. ইউটিলিটি সংযোগ":
-                  return PhaseInfo(title: "ইউটিলিটি সংযোগ", icon: "bolt.horizontal.circle.fill",
-                                  color: Color(red: 0.95, green: 0.55, blue: 0.15),
-                                  gradient: [Color(red: 0.85, green: 0.42, blue: 0.08), Color(red: 1.00, green: 0.72, blue: 0.30)])
-              case "৫. ক্রয় ও ঠিকাদার":
-                  return PhaseInfo(title: "ক্রয় ও ঠিকাদার", icon: "cart.fill",
-                                  color: Color(red: 0.15, green: 0.65, blue: 0.35),
-                                  gradient: [Color(red: 0.10, green: 0.52, blue: 0.28), Color(red: 0.35, green: 0.82, blue: 0.52)])
-              case "৬. সময়সূচি ও পরিকল্পনা":
-                  return PhaseInfo(title: "সময়সূচি ও পরিকল্পনা", icon: "calendar.badge.clock",
-                                  color: Color(red: 0.10, green: 0.65, blue: 0.65),
-                                  gradient: [Color(red: 0.05, green: 0.50, blue: 0.55), Color(red: 0.30, green: 0.85, blue: 0.82)])
-              case "৭. যন্ত্র ও শ্রমিক":
-                  return PhaseInfo(title: "যন্ত্র ও শ্রমিক", icon: "wrench.and.screwdriver.fill",
-                                  color: Color(red: 0.35, green: 0.35, blue: 0.75),
-                                  gradient: [Color(red: 0.25, green: 0.25, blue: 0.62), Color(red: 0.55, green: 0.55, blue: 0.95)])
-              case "৮. কাজ ও মান নিয়ন্ত্রণ":
-                  return PhaseInfo(title: "কাজ ও মান নিয়ন্ত্রণ", icon: "checkmark.seal.fill",
-                                  color: Color(red: 0.85, green: 0.25, blue: 0.25),
-                                  gradient: [Color(red: 0.72, green: 0.18, blue: 0.18), Color(red: 1.00, green: 0.45, blue: 0.45)])
-              case "৯. হস্তান্তর":
-                  return PhaseInfo(title: "হস্তান্তর", icon: "key.fill",
-                                  color: Color(red: 0.45, green: 0.45, blue: 0.50),
-                                  gradient: [Color(red: 0.35, green: 0.35, blue: 0.42), Color(red: 0.65, green: 0.65, blue: 0.70)])
-              default:
-                  return PhaseInfo(title: name ?? "Other", icon: "circle.fill",
-                                  color: .gray, gradient: [.gray, .secondary])
+              init() {
+                  favs = Set(UserDefaults.standard.array(forKey: "favs") as? [Int] ?? [])
+                  done = Set(UserDefaults.standard.array(forKey: "done") as? [Int] ?? [])
+                  notes = UserDefaults.standard.dictionary(forKey: "notes") as? [String: String] ?? [:]
               }
+              var phases: [String] {
+                  var seen = Set<String>()
+                  return topics.compactMap { $0.phase }.filter { seen.insert($0).inserted }
+              }
+              func color(_ p: String?) -> Color {
+                  let pal: [Color] = [.blue, .purple, .orange, .teal, .pink, .indigo, .green, .red, .brown]
+                  guard let p = p, let i = phases.firstIndex(of: p) else { return .gray }
+                  return pal[i % pal.count]
+              }
+              func toggleFav(_ id: Int) { if favs.contains(id) { favs.remove(id) } else { favs.insert(id) } }
+              func toggleDone(_ id: Int) { if done.contains(id) { done.remove(id) } else { done.insert(id) } }
           }
 
-          // MARK: - App
           @main struct SiteBookApp: App {
-              var body: some Scene { WindowGroup { RootView() } }
-          }
-
-          // MARK: - Store (Bookmarks + Selection)
-          final class AppState: ObservableObject {
-              @Published var bookmarks: Set<Int> = []
-              func toggle(_ id: Int) {
-                  if bookmarks.contains(id) { bookmarks.remove(id) } else { bookmarks.insert(id) }
+              @StateObject private var store = Store()
+              var body: some Scene {
+                  WindowGroup { HomeView().environmentObject(store) }
               }
           }
 
-          // MARK: - Root with TabView
-          struct RootView: View {
-              let topics = loadTopics()
-              @StateObject var state = AppState()
-
-              var body: some View {
-                  TabView {
-                      HomeView(topics: topics)
-                          .tabItem { Label("হোম", systemImage: "square.grid.2x2.fill") }
-                      ContentsView(topics: topics)
-                          .tabItem { Label("সূচি", systemImage: "list.bullet.rectangle.portrait.fill") }
-                      BookmarksView(topics: topics)
-                          .tabItem { Label("বুকমার্ক", systemImage: "bookmark.fill") }
-                  }
-                  .environmentObject(state)
-                  .tint(.blue)
-              }
-          }
-
-          // MARK: - Home (Phase Cards)
           struct HomeView: View {
-              let topics: [Topic]
-              let phases = ["১. সাইট অনুসন্ধান","২. ডিজাইন ও পরিকল্পনা","৩. টিম ও ব্যবস্থাপনা","৪. ইউটিলিটি সংযোগ","৫. ক্রয় ও ঠিকাদার","৬. সময়সূচি ও পরিকল্পনা","৭. যন্ত্র ও শ্রমিক","৮. কাজ ও মান নিয়ন্ত্রণ","৯. হস্তান্তর"]
+              @EnvironmentObject var s: Store
+              @State private var q = ""
+              @State private var phase: String? = nil
+              @State private var onlyFav = false
 
+              var list: [Topic] {
+                  s.topics.filter { t in
+                      (phase == nil || t.phase == phase)
+                      && (!onlyFav || s.favs.contains(t.id))
+                      && (q.isEmpty || t.haystack.contains(q.lowercased()))
+                  }
+              }
               var body: some View {
                   NavigationStack {
                       ScrollView {
                           VStack(spacing: 14) {
-                              // Hero banner
-                              ZStack(alignment: .leading) {
-                                  LinearGradient(colors: [Color(red:0.10,green:0.35,blue:0.75), Color(red:0.35,green:0.65,blue:0.95)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                                  VStack(alignment: .leading, spacing: 6) {
-                                      Text("SiteBook").font(.largeTitle).bold().foregroundColor(.white)
-                                      Text("নির্মাণ প্রকল্পের সম্পূর্ণ গাইড").font(.subheadline).foregroundColor(.white.opacity(0.9))
-                                      HStack(spacing: 18) {
-                                          VStack(alignment: .leading) {
-                                              Text("\(topics.count)").font(.title2).bold().foregroundColor(.white)
-                                              Text("টপিক").font(.caption).foregroundColor(.white.opacity(0.8))
-                                          }
-                                          VStack(alignment: .leading) {
-                                              Text("9").font(.title2).bold().foregroundColor(.white)
-                                              Text("ধাপ").font(.caption).foregroundColor(.white.opacity(0.8))
-                                          }
-                                      }.padding(.top, 6)
-                                  }
-                                  .padding(20)
+                              hero
+                              chips
+                              if list.isEmpty {
+                                  Text("কিছু পাওয়া যায়নি").foregroundColor(.secondary).padding(.top, 40)
                               }
-                              .frame(maxWidth: .infinity, alignment: .leading)
-                              .clipShape(RoundedRectangle(cornerRadius: 18))
-                              .shadow(color: .blue.opacity(0.25), radius: 10, y: 6)
-                              .padding(.horizontal)
-
-                              Text("ধাপসমূহ").font(.headline).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal).padding(.top, 6)
-
-                              ForEach(phases, id: \.self) { ph in
-                                  let info = phaseInfo(ph)
-                                  let count = topics.filter { $0.phase == ph }.count
-                                  NavigationLink(destination: PhaseListView(phase: ph, topics: topics)) {
-                                      HStack(spacing: 14) {
-                                          ZStack {
-                                              LinearGradient(colors: info.gradient, startPoint: .topLeading, endPoint: .bottomTrailing)
-                                              Image(systemName: info.icon)
-                                                  .font(.system(size: 22, weight: .semibold))
-                                                  .foregroundColor(.white)
-                                          }
-                                          .frame(width: 52, height: 52)
-                                          .clipShape(RoundedRectangle(cornerRadius: 14))
-
-                                          VStack(alignment: .leading, spacing: 3) {
-                                              Text(info.title).font(.headline).foregroundColor(.primary)
-                                              Text("\(count) টপিক").font(.caption).foregroundColor(.secondary)
-                                          }
-                                          Spacer()
-                                          Image(systemName: "chevron.right").foregroundColor(.secondary.opacity(0.6))
-                                      }
-                                      .padding(14)
-                                      .background(Color(.secondarySystemGroupedBackground))
-                                      .clipShape(RoundedRectangle(cornerRadius: 16))
-                                      .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.secondary.opacity(0.08), lineWidth: 1))
-                                      .shadow(color: info.color.opacity(0.10), radius: 8, y: 3)
-                                      .padding(.horizontal)
+                              LazyVStack(spacing: 10) {
+                                  ForEach(list) { t in
+                                      NavigationLink(value: t) { row(t) }.buttonStyle(.plain)
                                   }
                               }
-                          }.padding(.vertical)
+                          }.padding()
                       }
                       .background(Color(.systemGroupedBackground))
-                      .navigationBarTitleDisplayMode(.inline)
+                      .navigationTitle("SiteBook")
+                      .searchable(text: $q, prompt: "Search / খুঁজুন")
+                      .navigationDestination(for: Topic.self) { DetailView(start: $0.id) }
                   }
               }
-          }
-
-          // MARK: - Phase List
-          struct PhaseListView: View {
-              let phase: String
-              let topics: [Topic]
-              var body: some View {
-                  let info = phaseInfo(phase)
-                  let filtered = topics.filter { $0.phase == phase }
-                  List {
-                      ForEach(filtered) { t in
-                          NavigationLink(destination: TopicView(t: t)) {
-                              HStack(spacing: 12) {
-                                  ZStack {
-                                      Circle().fill(LinearGradient(colors: info.gradient, startPoint: .topLeading, endPoint: .bottomTrailing))
-                                      Text("\(t.id)").font(.caption).bold().foregroundColor(.white)
-                                  }.frame(width: 36, height: 36)
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text(t.en).font(.subheadline).bold().lineLimit(2)
-                                      Text(t.bn).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                                  }
-                              }.padding(.vertical, 4)
+              var hero: some View {
+                  let n = s.topics.count, d = s.done.count
+                  return VStack(alignment: .leading, spacing: 10) {
+                      Text("নির্মাণ জ্ঞানকোষ").font(.title2).bold()
+                      Text("\(n) টপিক • \(s.phases.count) ধাপ • \(s.favs.count) ফেভারিট")
+                          .font(.subheadline).opacity(0.9)
+                      ProgressView(value: Double(d), total: Double(max(n, 1))).tint(.white)
+                      Text("সম্পন্ন: \(d)/\(n)").font(.caption).opacity(0.9)
+                  }
+                  .foregroundColor(.white).padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                  .background(LinearGradient(colors: [.indigo, .blue, .teal], startPoint: .topLeading, endPoint: .bottomTrailing))
+                  .clipShape(RoundedRectangle(cornerRadius: 20))
+                  .shadow(color: .blue.opacity(0.3), radius: 10, y: 5)
+              }
+              var chips: some View {
+                  ScrollView(.horizontal, showsIndicators: false) {
+                      HStack {
+                          chip("সব", on: phase == nil && !onlyFav, c: .blue) { phase = nil; onlyFav = false }
+                          chip("⭐ ফেভারিট", on: onlyFav, c: .orange) { onlyFav.toggle(); phase = nil }
+                          ForEach(s.phases, id: \.self) { p in
+                              chip(p, on: phase == p, c: s.color(p)) { phase = (phase == p ? nil : p); onlyFav = false }
                           }
                       }
                   }
-                  .navigationTitle(info.title)
-                  .navigationBarTitleDisplayMode(.inline)
               }
-          }
-
-          // MARK: - Contents (all grouped)
-          struct ContentsView: View {
-              let topics: [Topic]
-              let phases = ["১. সাইট অনুসন্ধান","২. ডিজাইন ও পরিকল্পনা","৩. টিম ও ব্যবস্থাপনা","৪. ইউটিলিটি সংযোগ","৫. ক্রয় ও ঠিকাদার","৬. সময়সূচি ও পরিকল্পনা","৭. যন্ত্র ও শ্রমিক","৮. কাজ ও মান নিয়ন্ত্রণ","৯. হস্তান্তর"]
-              @State private var q = ""
-
-              var filtered: [Topic] {
-                  let s = q.lowercased().trimmingCharacters(in: .whitespaces)
-                  if s.isEmpty { return topics }
-                  return topics.filter { t in
-                      let all = [t.en, t.bn, t.what ?? "", t.why ?? "", t.uses ?? "", t.duration ?? ""]
-                          + (t.steps ?? []) + (t.ways ?? []) + (t.sources ?? []) + (t.examples ?? [])
-                          + (t.keyPoints ?? []) + (t.mistakes ?? []) + (t.tips ?? [])
-                      return all.joined(separator: " ").lowercased().contains(s)
+              func chip(_ t: String, on: Bool, c: Color, _ a: @escaping () -> Void) -> some View {
+                  Button(action: a) {
+                      Text(t).font(.footnote).bold().padding(.horizontal, 12).padding(.vertical, 8)
+                          .background(on ? c : c.opacity(0.12)).foregroundColor(on ? .white : c)
+                          .clipShape(Capsule())
                   }
               }
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          ForEach(phases, id: \.self) { ph in
-                              let items = filtered.filter { $0.phase == ph }
-                              if !items.isEmpty {
-                                  let info = phaseInfo(ph)
-                                  Section {
-                                      ForEach(items) { t in
-                                          NavigationLink(destination: TopicView(t: t)) {
-                                              HStack(spacing: 10) {
-                                                  Image(systemName: info.icon).foregroundColor(info.color)
-                                                  VStack(alignment: .leading, spacing: 2) {
-                                                      Text("\(t.id). \(t.en)").font(.subheadline).bold()
-                                                      Text(t.bn).font(.caption).foregroundColor(.secondary)
-                                                  }
-                                              }
-                                          }
-                                      }
-                                  } header: {
-                                      HStack {
-                                          Image(systemName: info.icon)
-                                          Text(info.title)
-                                      }.foregroundColor(info.color)
-                                  }
-                              }
-                          }
+              func row(_ t: Topic) -> some View {
+                  HStack(spacing: 12) {
+                      Text("\(t.id)").font(.subheadline).bold().foregroundColor(.white)
+                          .frame(width: 38, height: 38).background(s.color(t.phase)).clipShape(Circle())
+                      VStack(alignment: .leading, spacing: 3) {
+                          Text(t.en).font(.headline).foregroundColor(.primary).multilineTextAlignment(.leading)
+                          Text(t.bn).font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.leading)
+                          Text(t.phase ?? "").font(.caption2).foregroundColor(s.color(t.phase))
                       }
-                      .navigationTitle("সূচিপত্র")
-                      .searchable(text: $q, prompt: "টপিক, ধাপ, কীওয়ার্ড খুঁজুন")
+                      Spacer()
+                      if s.done.contains(t.id) { Image(systemName: "checkmark.circle.fill").foregroundColor(.green) }
+                      if s.favs.contains(t.id) { Image(systemName: "star.fill").foregroundColor(.orange) }
                   }
+                  .padding(12).frame(maxWidth: .infinity)
+                  .background(Color(.secondarySystemGroupedBackground))
+                  .clipShape(RoundedRectangle(cornerRadius: 16))
               }
           }
 
-          // MARK: - Bookmarks
-          struct BookmarksView: View {
-              let topics: [Topic]
-              @EnvironmentObject var state: AppState
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          ForEach(topics.filter { state.bookmarks.contains($0.id) }) { t in
-                              NavigationLink(destination: TopicView(t: t)) {
-                                  HStack(spacing: 10) {
-                                      let info = phaseInfo(t.phase)
-                                      Image(systemName: info.icon).foregroundColor(info.color)
-                                      VStack(alignment: .leading, spacing: 2) {
-                                          Text("\(t.id). \(t.en)").font(.subheadline).bold()
-                                          Text(t.bn).font(.caption).foregroundColor(.secondary)
-                                      }
-                                  }
-                              }
-                          }
-                      }
-                      .navigationTitle("বুকমার্ক")
-                  }
-              }
-          }
-
-          // MARK: - Reusable Card
           struct Card<Content: View>: View {
-              let title: String
-              let icon: String
-              let color: Color
-              @ViewBuilder var content: Content
-
+              let title: String, icon: String, color: Color
+              let content: Content
+              init(_ title: String, _ icon: String, _ color: Color, @ViewBuilder content: () -> Content) {
+                  self.title = title; self.icon = icon; self.color = color; self.content = content()
+              }
               var body: some View {
                   VStack(alignment: .leading, spacing: 10) {
-                      HStack(spacing: 8) {
-                          Image(systemName: icon).font(.system(size: 15, weight: .semibold)).foregroundColor(color)
-                          Text(title).font(.headline).foregroundColor(color)
-                      }
+                      Label(title, systemImage: icon).font(.headline).foregroundColor(color)
                       content
                   }
-                  .padding(14)
-                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .frame(maxWidth: .infinity, alignment: .leading).padding(16)
                   .background(Color(.secondarySystemGroupedBackground))
-                  .clipShape(RoundedRectangle(cornerRadius: 14))
-                  .overlay(RoundedRectangle(cornerRadius: 14).stroke(color.opacity(0.12), lineWidth: 1))
+                  .clipShape(RoundedRectangle(cornerRadius: 16))
               }
           }
 
-          // MARK: - Topic Detail (premium)
-          struct TopicView: View {
-              let t: Topic
-              @EnvironmentObject var state: AppState
+          struct DetailView: View {
+              @EnvironmentObject var s: Store
+              @AppStorage("fs") private var fs: Double = 16
+              @State private var cur: Int
+              init(start: Int) { _cur = State(initialValue: start) }
+
+              var idx: Int? { s.topics.firstIndex { $0.id == cur } }
+              var t: Topic? { idx.map { s.topics[$0] } }
 
               var body: some View {
-                  let info = phaseInfo(t.phase)
                   ScrollView {
-                      VStack(spacing: 14) {
-                          // Hero
-                          ZStack(alignment: .bottomLeading) {
-                              LinearGradient(colors: info.gradient, startPoint: .topLeading, endPoint: .bottomTrailing)
-                              VStack(alignment: .leading, spacing: 8) {
-                                  HStack {
-                                      HStack(spacing: 6) {
-                                          Image(systemName: info.icon)
-                                          Text(info.title)
-                                      }
-                                      .font(.caption).bold()
-                                      .padding(.horizontal, 10).padding(.vertical, 5)
-                                      .background(Color.white.opacity(0.22))
-                                      .foregroundColor(.white)
-                                      .clipShape(Capsule())
-                                      Spacer()
-                                      Text("#\(t.id)").font(.caption).bold()
-                                          .padding(.horizontal, 10).padding(.vertical, 5)
-                                          .background(Color.white.opacity(0.22))
-                                          .foregroundColor(.white)
-                                          .clipShape(Capsule())
-                                  }
-                                  Text(t.en).font(.title2).bold().foregroundColor(.white)
-                                  Text(t.bn).font(.title3).foregroundColor(.white.opacity(0.95))
-                                  if let d = t.duration, !d.isEmpty {
-                                      HStack(spacing: 6) {
-                                          Image(systemName: "clock.fill")
-                                          Text(d)
-                                      }.font(.caption).foregroundColor(.white.opacity(0.9))
-                                  }
+                      if let t = t {
+                          let c = s.color(t.phase)
+                          VStack(alignment: .leading, spacing: 14) {
+                              header(t, c)
+                              analysis(t, c)
+                              text("এটা কী? (What)", "questionmark.circle.fill", c, t.what)
+                              text("ব্যবহার (Use)", "wrench.and.screwdriver.fill", c, t.uses)
+                              text("কেন করা হয়? (Why)", "exclamationmark.triangle.fill", .orange, t.why)
+                              list("ধাপসমূহ (Steps)", "list.number", c, t.steps, numbered: true)
+                              list("পদ্ধতি (Ways)", "arrow.triangle.branch", .purple, t.ways)
+                              list("উদাহরণ (Examples)", "lightbulb.fill", .yellow, t.examples, numbered: true)
+                              list("সাধারণ ভুল (Mistakes)", "xmark.octagon.fill", .red, t.mistakes)
+                              list("ঝুঁকি (Risks)", "flame.fill", .red, t.risks)
+                              list("টিপস (Tips)", "sparkles", .teal, t.tips)
+                              list("চেকলিস্ট (Checklist)", "checkmark.square.fill", .green, t.checklist)
+                              list("সোর্স (Sources)", "books.vertical.fill", .gray, t.sources)
+                              if t.what == nil {
+                                  Text("বিস্তারিত তথ্য শিগগিরই যোগ হবে।").italic().foregroundColor(.secondary)
                               }
-                              .padding(18)
-                          }
-                          .frame(maxWidth: .infinity, alignment: .leading)
-                          .clipShape(RoundedRectangle(cornerRadius: 18))
-                          .shadow(color: info.color.opacity(0.30), radius: 12, y: 6)
-
-                          // Key Points
-                          if let kp = t.keyPoints, !kp.isEmpty {
-                              Card(title: "মূল তথ্য", icon: "star.circle.fill", color: info.color) {
-                                  VStack(alignment: .leading, spacing: 6) {
-                                      ForEach(kp, id: \.self) { k in
-                                          HStack(alignment: .top, spacing: 8) {
-                                              Image(systemName: "sparkle").font(.caption).foregroundColor(info.color).padding(.top, 3)
-                                              Text(k).font(.subheadline)
-                                          }
-                                      }
-                                  }
-                              }
-                          }
-
-                          // What
-                          if let w = t.what, !w.isEmpty {
-                              Card(title: "এটা কী?", icon: "info.circle.fill", color: .blue) {
-                                  Text(w).font(.subheadline).lineSpacing(3)
-                              }
-                          }
-                          // Uses
-                          if let u = t.uses, !u.isEmpty {
-                              Card(title: "কী কাজে লাগে?", icon: "target", color: .green) {
-                                  Text(u).font(.subheadline).lineSpacing(3)
-                              }
-                          }
-                          // Why
-                          if let w = t.why, !w.isEmpty {
-                              Card(title: "কেন জরুরি?", icon: "exclamationmark.triangle.fill", color: .orange) {
-                                  Text(w).font(.subheadline).lineSpacing(3)
-                              }
-                          }
-
-                          // Steps timeline
-                          if let s = t.steps, !s.isEmpty {
-                              Card(title: "ধাপসমূহ", icon: "list.number", color: .blue) {
-                                  VStack(alignment: .leading, spacing: 10) {
-                                      ForEach(Array(s.enumerated()), id: \.offset) { i, step in
-                                          HStack(alignment: .top, spacing: 10) {
-                                              ZStack {
-                                                  Circle().fill(info.gradient[0])
-                                                  Text("\(i+1)").font(.caption2).bold().foregroundColor(.white)
-                                              }.frame(width: 22, height: 22)
-                                              Text(step).font(.subheadline)
-                                          }
-                                      }
-                                  }
-                              }
-                          }
-
-                          // Mistakes
-                          if let m = t.mistakes, !m.isEmpty {
-                              Card(title: "সাধারণ ভুল", icon: "xmark.octagon.fill", color: .red) {
-                                  VStack(alignment: .leading, spacing: 6) {
-                                      ForEach(m, id: \.self) { x in
-                                          HStack(alignment: .top, spacing: 8) {
-                                              Image(systemName: "xmark").font(.caption).foregroundColor(.red).padding(.top, 3)
-                                              Text(x).font(.subheadline)
-                                          }
-                                      }
-                                  }
-                              }
-                          }
-
-                          // Tips
-                          if let tp = t.tips, !tp.isEmpty {
-                              Card(title: "প্রো টিপস", icon: "lightbulb.fill", color: .yellow) {
-                                  VStack(alignment: .leading, spacing: 6) {
-                                      ForEach(tp, id: \.self) { x in
-                                          HStack(alignment: .top, spacing: 8) {
-                                              Image(systemName: "checkmark.seal.fill").font(.caption).foregroundColor(.yellow).padding(.top, 3)
-                                              Text(x).font(.subheadline)
-                                          }
-                                      }
-                                  }
-                              }
-                          }
-
-                          // Ways
-                          if let w = t.ways, !w.isEmpty {
-                              Card(title: "পদ্ধতি / ধরন", icon: "square.stack.3d.up.fill", color: .purple) {
-                                  VStack(alignment: .leading, spacing: 6) {
-                                      ForEach(w, id: \.self) { x in
-                                          HStack(alignment: .top, spacing: 8) {
-                                              Image(systemName: "circle.fill").font(.system(size: 6)).foregroundColor(.purple).padding(.top, 6)
-                                              Text(x).font(.subheadline)
-                                          }
-                                      }
-                                  }
-                              }
-                          }
-
-                          // Examples
-                          if let ex = t.examples, !ex.isEmpty {
-                              Card(title: "উদাহরণ", icon: "doc.text.magnifyingglass", color: .indigo) {
-                                  VStack(alignment: .leading, spacing: 8) {
-                                      ForEach(Array(ex.enumerated()), id: \.offset) { i, e in
-                                          HStack(alignment: .top, spacing: 8) {
-                                              Text("\(i+1).").font(.caption).bold().foregroundColor(.indigo).padding(.top, 2)
-                                              Text(e).font(.subheadline)
-                                          }
-                                      }
-                                  }
-                              }
-                          }
-
-                          // Sources
-                          if let s = t.sources, !s.isEmpty {
-                              Card(title: "সোর্স / রেফারেন্স", icon: "book.closed.fill", color: .teal) {
-                                  VStack(alignment: .leading, spacing: 6) {
-                                      ForEach(s, id: \.self) { x in
-                                          HStack(alignment: .top, spacing: 8) {
-                                              Image(systemName: "bookmark.fill").font(.caption).foregroundColor(.teal).padding(.top, 3)
-                                              Text(x).font(.footnote)
-                                          }
-                                      }
-                                  }
-                              }
-                          }
+                              noteBox
+                              nav
+                          }.padding()
                       }
-                      .padding()
                   }
                   .background(Color(.systemGroupedBackground))
+                  .navigationTitle("টপিক \(cur)")
                   .navigationBarTitleDisplayMode(.inline)
                   .toolbar {
-                      ToolbarItem(placement: .topBarTrailing) {
-                          Button {
-                              state.toggle(t.id)
-                          } label: {
-                              Image(systemName: state.bookmarks.contains(t.id) ? "bookmark.fill" : "bookmark")
+                      ToolbarItemGroup(placement: .navigationBarTrailing) {
+                          if let t = t {
+                              Button { s.toggleFav(t.id) } label: {
+                                  Image(systemName: s.favs.contains(t.id) ? "star.fill" : "star")
+                              }
+                              ShareLink(item: shareText(t))
+                          }
+                          Menu {
+                              Stepper("লেখার সাইজ: \(Int(fs))", value: $fs, in: 13...26)
+                          } label: { Image(systemName: "textformat.size") }
+                      }
+                  }
+              }
+
+              func header(_ t: Topic, _ c: Color) -> some View {
+                  VStack(alignment: .leading, spacing: 8) {
+                      Text(t.phase ?? "").font(.caption).bold().padding(.horizontal, 10).padding(.vertical, 4)
+                          .background(Color.white.opacity(0.25)).clipShape(Capsule())
+                      Text(t.en).font(.title2).bold()
+                      Text(t.bn).font(.title3).opacity(0.92)
+                      Button { s.toggleDone(t.id) } label: {
+                          Label(s.done.contains(t.id) ? "সম্পন্ন ✔" : "সম্পন্ন চিহ্নিত করুন",
+                                systemImage: s.done.contains(t.id) ? "checkmark.circle.fill" : "circle")
+                              .font(.footnote).bold().padding(.horizontal, 12).padding(.vertical, 8)
+                              .background(Color.white.opacity(0.22)).clipShape(Capsule())
+                      }
+                  }
+                  .foregroundColor(.white).padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                  .background(LinearGradient(colors: [c, c.opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                  .clipShape(RoundedRectangle(cornerRadius: 20))
+              }
+
+              func analysis(_ t: Topic, _ c: Color) -> some View {
+                  Card("দ্রুত বিশ্লেষণ (Analysis)", "chart.bar.fill", c) {
+                      HStack {
+                          stat("ধাপ", t.steps?.count ?? 0, c)
+                          stat("পদ্ধতি", t.ways?.count ?? 0, .purple)
+                          stat("উদাহরণ", t.examples?.count ?? 0, .orange)
+                          stat("সোর্স", t.sources?.count ?? 0, .gray)
+                      }
+                      HStack {
+                          stat("ভুল", t.mistakes?.count ?? 0, .red)
+                          stat("ঝুঁকি", t.risks?.count ?? 0, .red)
+                          stat("টিপস", t.tips?.count ?? 0, .teal)
+                          stat("চেক", t.checklist?.count ?? 0, .green)
+                      }
+                      ProgressView(value: min(1.0, Double(t.total) / 24.0)).tint(c)
+                      Text(t.total > 16 ? "গভীরতা: বিস্তারিত" : t.total > 9 ? "গভীরতা: মাঝারি" : "গভীরতা: সংক্ষিপ্ত")
+                          .font(.caption).foregroundColor(.secondary)
+                  }
+              }
+              func stat(_ n: String, _ v: Int, _ c: Color) -> some View {
+                  VStack {
+                      Text("\(v)").font(.title3).bold().foregroundColor(c)
+                      Text(n).font(.caption2).foregroundColor(.secondary)
+                  }.frame(maxWidth: .infinity)
+              }
+
+              @ViewBuilder func text(_ title: String, _ icon: String, _ c: Color, _ v: String?) -> some View {
+                  if let v = v, !v.isEmpty {
+                      Card(title, icon, c) {
+                          Text(v).font(.system(size: fs)).lineSpacing(5).textSelection(.enabled)
+                      }
+                  }
+              }
+              @ViewBuilder func list(_ title: String, _ icon: String, _ c: Color, _ items: [String]?, numbered: Bool = false) -> some View {
+                  if let items = items, !items.isEmpty {
+                      Card(title, icon, c) {
+                          ForEach(Array(items.enumerated()), id: \.offset) { i, x in
+                              HStack(alignment: .top, spacing: 10) {
+                                  if numbered {
+                                      Text("\(i + 1)").font(.caption).bold().foregroundColor(.white)
+                                          .frame(width: 22, height: 22).background(c).clipShape(Circle())
+                                  } else {
+                                      Circle().fill(c).frame(width: 7, height: 7).padding(.top, 8)
+                                  }
+                                  Text(x).font(.system(size: fs)).lineSpacing(4).textSelection(.enabled)
+                              }
                           }
                       }
                   }
+              }
+              var noteBox: some View {
+                  let b = Binding<String>(
+                      get: { s.notes["\(cur)"] ?? "" },
+                      set: { s.notes["\(cur)"] = $0 })
+                  return Card("আমার নোট (Notes)", "square.and.pencil", .blue) {
+                      TextEditor(text: b).frame(minHeight: 90)
+                          .scrollContentBackground(.hidden)
+                          .padding(6).background(Color(.systemGray6)).clipShape(RoundedRectangle(cornerRadius: 10))
+                  }
+              }
+              var nav: some View {
+                  HStack {
+                      Button { if let i = idx, i > 0 { cur = s.topics[i - 1].id } } label: {
+                          Label("আগের", systemImage: "chevron.left")
+                      }.disabled((idx ?? 0) == 0)
+                      Spacer()
+                      Button { if let i = idx, i < s.topics.count - 1 { cur = s.topics[i + 1].id } } label: {
+                          Label("পরের", systemImage: "chevron.right")
+                      }.disabled((idx ?? 0) >= s.topics.count - 1)
+                  }
+                  .buttonStyle(.borderedProminent).padding(.bottom, 20)
+              }
+              func shareText(_ t: Topic) -> String {
+                  var o = "\(t.en)\n\(t.bn)\n\n\(t.what ?? "")"
+                  if let st = t.steps { o += "\n\nধাপ:\n" + st.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n") }
+                  return o
               }
           }
           EOF_SWIFT
+          cat > Sources/extras.json <<'EOF_EXTRAS'
+          {
+           "1": {
+            "mistakes": ["প্রয়োজনের চেয়ে কম বোরহোল করা, ফলে সাইটের পুরো মাটির চিত্র ধরা পড়ে না", "পানির লেভেল রেকর্ড না করা", "রিপোর্ট না পড়েই পুরনো আশপাশের ভবনের ডিজাইন নকল করা"],
+            "risks": ["ভুল ফাউন্ডেশনে অসম বসে যাওয়া ও ফাটল", "ভূমিকম্পে Liquefaction-এ ভবনের কাত হয়ে যাওয়া"],
+            "tips": ["বর্ষার শেষে ও শুষ্ক মৌসুমে পানির লেভেল আলাদা হতে পারে—সময় উল্লেখ করুন", "পাশের প্লটের বোরলগ থাকলে তুলনা করে দেখুন"],
+            "checklist": ["বোরহোলের অবস্থান প্ল্যানে চিহ্নিত", "প্রতি ১.৫ মি-এ SPT রেকর্ড", "ল্যাব টেস্টের রিপোর্ট সংযুক্ত", "স্ট্রাকচারাল ইঞ্জিনিয়ার রিপোর্ট বুঝে নিয়েছেন"]
+           },
+           "2": {
+            "mistakes": ["শুধু পুরনো খতিয়ানের মাপে বিশ্বাস করে সরেজমিনে না মেলানো", "কন্ট্রোল পয়েন্ট ছাড়া Total Station বসানো", "পাশের জমির দখল সীমানা যাচাই না করা"],
+            "risks": ["সীমানা বিরোধে মামলা ও কাজ বন্ধ", "ভুল লেভেলে ড্রেনেজ উল্টো দিকে বইতে পারে"],
+            "tips": ["স্থায়ী বেঞ্চমার্ক সাইটের বাইরে নিরাপদ জায়গায় রাখুন", "বাউন্ডারি পিলারের ছবি ও কোঅর্ডিনেট ফাইলে সংরক্ষণ করুন"],
+            "checklist": ["দলিল-খতিয়ানের সাথে ক্ষেত্রফল মিলানো", "সবকটি কর্নারের কোঅর্ডিনেট", "গ্রিড লেভেল ও কনট্যুর", "সার্ভেয়ারের স্বাক্ষর"]
+           },
+           "3": {
+            "mistakes": ["ফায়ার ট্রাকের টার্নিং রেডিয়াস বিবেচনা না করা", "STP ও সাবস্টেশনের জায়গা শেষ মুহূর্তে খোঁজা", "সেটব্যাক ও FAR হিসাব ভুল ধরা"],
+            "risks": ["অনুমোদন বাতিল বা দেরি", "ভবিষ্যতে সম্প্রসারণে জায়গার অভাব"],
+            "tips": ["প্রযোজ্য FAR ও সেটব্যাক সবসময় সর্বশেষ নিয়ম থেকে যাচাই করুন", "দক্ষিণমুখী খোলা জায়গা রেখে আলো-বাতাস বাড়ান"],
+            "checklist": ["FAR ও MGC হিসাব শিট", "ফায়ার লেন ও অ্যাক্সেস", "পার্কিং সংখ্যা", "সবুজ এলাকা ও ড্রেনেজ"]
+           },
+           "4": {
+            "mistakes": ["রুমের মাপ নিয়েছেন কিন্তু দেয়ালের পুরুত্ব ধরেননি", "সিঁড়ির হেডরুম কম রাখা", "প্লাম্বিং শ্যাফট ও ডাক্টের জায়গা না রাখা"],
+            "risks": ["কোড লঙ্ঘনে অনুমোদন আটকে যাওয়া", "ডিজাইন বদলে ঢালাইয়ের পর বড় খরচ"],
+            "tips": ["কনসেপ্ট পর্যায়েই স্ট্রাকচারাল কলাম গ্রিডের সাথে মিলিয়ে নিন", "ওয়েট এরিয়া (বাথরুম-রান্নাঘর) একসাথে রাখলে পাইপ খরচ কমে"],
+            "checklist": ["Design Brief স্বাক্ষরিত", "ক্রস-ভেন্টিলেশন", "এক্সিট ও সিঁড়ির মাপ", "লিফট ও শ্যাফটের জায়গা"]
+           },
+           "5": {
+            "mistakes": ["একটিমাত্র রেফারেন্স পয়েন্ট থেকে সব সেটআউট করা", "পেগ যাচাই না করে খনন শুরু", "ভুল বাউন্ডারি ধরে সেটব্যাক মাপা"],
+            "risks": ["প্রতিবেশী প্লটে ঢুকে যাওয়া ও ভাঙার নোটিশ", "পুরো গ্রিড ভুল হয়ে কাঠামো ভুল জায়গায় বসা"],
+            "tips": ["কমপক্ষে দুইটি স্বাধীন পদ্ধতিতে (Total Station ও টেপ) সেটআউট যাচাই করুন", "পেগ কংক্রিটে ঢেলে স্থায়ী করুন"],
+            "checklist": ["কোঅর্ডিনেট চার্ট", "পেগ বসানো ও ছবি", "তির্যক দূরত্ব যাচাই", "ইঞ্জিনিয়ারের স্বাক্ষর"]
+           },
+           "6": {
+            "mistakes": ["চার দিকের এলিভেশনে লেভেল না মেলানো", "রেলিং ও প্যারাপেটের উচ্চতা বাদ দেওয়া", "ফিনিশ ম্যাটেরিয়াল লেবেল না করা"],
+            "risks": ["উচ্চতা সীমা লঙ্ঘন", "বাইরের ফিনিশে খরচ অনুমানের বাইরে চলে যাওয়া"],
+            "tips": ["রেন্ডার করে ক্লায়েন্টের সম্মতি নিন", "ড্রিপ মোল্ড ও জানালার সানশেড বৃষ্টির পানি সুরক্ষায় রাখুন"],
+            "checklist": ["চার এলিভেশন", "লেভেল চিহ্ন", "ফিনিশ ও রং", "মোট উচ্চতা"]
+           },
+           "7": {
+            "mistakes": ["কাট লাইন ভুল জায়গায় নেওয়া", "বিমের গভীরতা ও ফলস সিলিংয়ের জায়গা না মেলানো", "সিঁড়ির রাইজার-ট্রেড অসম রাখা"],
+            "risks": ["ঢালাইয়ের পর সিলিং নিচু হয়ে যাওয়া", "লিফট ওভারহেড কম পড়া"],
+            "tips": ["ডাক্টের নিচের ক্লিয়ার হাইট আলাদা করে লিখুন", "সিঁড়ির সেকশনে হ্যান্ডরেলের উচ্চতাও দেখান"],
+            "checklist": ["ফ্লোর-টু-ফ্লোর উচ্চতা", "স্ল্যাব-বিম গভীরতা", "হেডরুম ক্লিয়ারেন্স", "ফাউন্ডেশন গভীরতা"]
+           },
+           "8": {
+            "mistakes": ["ল্যাপ লেংথ ও হুকের ডিটেইল ঠিকমতো না দেওয়া", "কলাম-বিম জয়েন্টে টাই কম রাখা", "BBS ও ড্রয়িংয়ের মধ্যে অমিল"],
+            "risks": ["ভূমিকম্পে ভঙ্গুর ধসের ঝুঁকি", "রডের অপচয়ে বাজেট ছাড়ানো"],
+            "tips": ["ঢালাইয়ের আগে রড চেকলিস্টে ইঞ্জিনিয়ারের সই নিন", "কভার ব্লক নির্ধারিত মাপের ব্যবহার করুন"],
+            "checklist": ["মাপ ও গ্রেড", "রডের সংখ্যা ও স্পেসিং", "ল্যাপ ও হুক", "কভার", "থার্ড-পার্টি যাচাই"]
+           },
+           "9": {
+            "mistakes": ["দরজার ফ্রেম ও পাল্লার মাপ আলাদা না রাখা", "বাথরুমের ঢাল বাদ দেওয়া", "MEP পয়েন্টের সাথে টাইলস কাটিং না মেলানো"],
+            "risks": ["টাইলস নষ্ট ও পুনরায় কাজ", "মিস্ত্রির অনুমানে ভুল মাপ"],
+            "tips": ["ফিনিশ লেভেল ও রুফ লেভেল আলাদা করে লিখুন", "প্রথমে একটি মডেল রুমে কাজ করে অনুমোদন নিন"],
+            "checklist": ["রুম ফিনিশ শিডিউল", "ডোর-উইন্ডো শিডিউল", "বাথরুম ডিটেইল", "সিলিং প্ল্যান"]
+           },
+           "10": {
+            "mistakes": ["ভবিষ্যৎ লোড (এসি) বাদ দিয়ে ক্যাবল সাইজ ঠিক করা", "আর্থিং স্বাধীনভাবে ডিজাইন না করা", "ওয়াটার পাইপের কাছ দিয়ে কনডুইট চালানো"],
+            "risks": ["ওভারলোডে আগুন", "ভোল্টেজ ড্রপে যন্ত্র নষ্ট"],
+            "tips": ["সার্কিটে ২০–২৫% রিজার্ভ রাখুন", "রং-কোডেড ক্যাবল ও লেবেল রাখুন"],
+            "checklist": ["লোড ক্যালকুলেশন", "SLD", "আর্থিং রেজিস্ট্যান্স", "কনডুইট ঢালাইয়ের আগে বসানো"]
+           },
+           "11": {
+            "mistakes": ["স্লিভ ঢালাইয়ের পর বসাতে যাওয়া", "ভেন্ট পাইপ বাদ দেওয়া", "ঢাল উল্টো দিকে রাখা"],
+            "risks": ["স্ল্যাবে লিকেজ ও ড্যাম্প", "সাইফন ও দুর্গন্ধ"],
+            "tips": ["লুকানো পাইপের আগে প্রেসার টেস্ট করে ছবি রাখুন", "বাথরুমের ফ্লোরে ওয়াটারপ্রুফিং ও পন্ডিং টেস্ট করুন"],
+            "checklist": ["স্লিভ অবস্থান", "পাইপ সাইজ ও ঢাল", "প্রেসার টেস্ট রেকর্ড", "ফিক্সচার ইউনিট হিসাব"]
+           },
+           "12": {
+            "mistakes": ["ম্যানহোলের গভীরতা ও ইনভার্ট লেভেল না মেলানো", "ময়লা ও বৃষ্টির পানি একসাথে মেশানো", "সেপটিক ট্যাংক খুব কাছাকাছি নলকূপের পাশে বসানো"],
+            "risks": ["ব্যাকফ্লো ও জলাবদ্ধতা", "ভূগর্ভস্থ পানি দূষণ"],
+            "tips": ["ইনভার্ট লেভেল চার্ট রাখুন", "ম্যানহোল ঢাকনার লেভেল ফিনিশ লেভেলের সাথে মেলান"],
+            "checklist": ["পাইপ ঢাল", "ম্যানহোল স্পেসিং", "Water/Air Test", "আউটলেট সংযোগ"]
+           },
+           "13": {
+            "mistakes": ["বর্জ্যের প্রকৃত পরিমাণের চেয়ে কম ক্যাপাসিটি ধরা", "ব্লোয়ারের ব্যাকআপ না রাখা", "কমিশনিংয়ের আগে বায়োলজিক্যাল সিড না দেওয়া"],
+            "risks": ["আউটলেট মানের বাইরে যাওয়া ও জরিমানা", "অপারেশনে দুর্গন্ধ ও আবাসিকদের অভিযোগ"],
+            "tips": ["অপারেটর প্রশিক্ষণ আগেই ঠিক করুন", "স্লাজ নিষ্পত্তির পরিকল্পনা রাখুন"],
+            "checklist": ["m³/day হিসাব", "টেস্ট রিপোর্ট", "P&ID", "DoE ছাড়পত্র"]
+           },
+           "14": {
+            "mistakes": ["ডাক্ট রুট ও বিমের উচ্চতা না মেলানো", "কনডেনসেট ড্রেনের ঢাল না রাখা", "বেসমেন্ট এয়ার চেঞ্জ কম ধরা"],
+            "risks": ["সিলিং নিচু হয়ে যাওয়া", "ধোঁয়া নিয়ন্ত্রণে ব্যর্থতা"],
+            "tips": ["ডাক্টে ইনসুলেশন ধারাবাহিক রাখুন", "মাপার আগে সিলিং ও MEP কো-অর্ডিনেশন ড্রয়িং করুন"],
+            "checklist": ["কুলিং লোড", "ডাক্ট সাইজ", "ফায়ার ডাম্পার", "ড্রেন লাইন"]
+           },
+           "15": {
+            "mistakes": ["স্প্রিংকলার হেড ও ডিটেক্টর একই সিলিংয়ে ধাক্কা খাওয়া", "পাম্পের পানির রিজার্ভার কম রাখা", "রাইজারের ভালভ পরীক্ষা না করা"],
+            "risks": ["আগুনে ব্যবস্থা কাজ না করা", "ফায়ার NOC না পাওয়া ও বসবাসের অনুমতি আটকে যাওয়া"],
+            "tips": ["ফায়ার ড্রিল নিয়মিত করান", "এক্সিট সাইনেজ ব্যাটারি ব্যাকআপসহ রাখুন"],
+            "checklist": ["হ্যাজার্ড ক্লাস", "হাইড্রোলিক হিসাব", "পাম্প ও রিজার্ভার", "অ্যালার্ম প্যানেল টেস্ট", "ফায়ার সার্ভিস পরিদর্শন"]
+           }
+          }
+          EOF_EXTRAS
           cat > Sources/topics.json <<'EOF_JSON'
-          [
-           {
-            "id": 1,
-            "en": "Soil Test (N-value, Soil Strength)",
-            "bn": "মাটি পরীক্ষা (এন-ভ্যালু, মাটির শক্তি)",
-            "phase": "১. সাইট অনুসন্ধান",
-            "duration": "২–৪ সপ্তাহ (বড় সাইটে ৬ সপ্তাহ)",
-            "what": "নির্মাণের আগে মাটির স্তর, ধরন, ঘনত্ব, বহন ক্ষমতা ও ভূগর্ভস্থ পানির অবস্থা জানার জন্য বৈজ্ঞানিক পরীক্ষা। SPT-এ ৬৩.৫ কেজি হাতুড়ি ৭৬ সেমি উচ্চতা থেকে ফেলে স্যাম্পলার প্রতি ১৫ সেমি ঢোকানো হয়; শেষ ৩০ সেমিতে প্রয়োজনীয় আঘাত সংখ্যাই N-value। N-value থেকে মাটির শক্তি, ঘনত্ব ও ফাউন্ডেশনের ধরন নির্ধারণ হয়।",
-            "uses": "ফাউন্ডেশনের ধরন (Shallow/Raft/Pile) নির্বাচন, Allowable Bearing Capacity নির্ধারণ, পাইলের গভীরতা ও সংখ্যা ঠিক করা, ভূমিকম্পজনিত Liquefaction সম্ভাবনা যাচাই এবং স্ট্রাকচারাল ডিজাইনারকে লোড বহনের ইনপুট দেওয়া।",
-            "why": "ভুল মাটি-বিশ্লেষণে ভুল ফাউন্ডেশন হলে বিল্ডিং বসে যাওয়া, ফাটল, এমনকি ধসের ঝুঁকি থাকে। BNBC 2020 অনুযায়ী বহুতল ভবনের জন্য SPT-ভিত্তিক জিওটেকনিক্যাল রিপোর্ট বাধ্যতামূলক।",
-            "steps": [
-             "সাইট প্ল্যান দেখে বোরহোলের সংখ্যা ও অবস্থান ঠিক করা (প্রতি ১০০০ m² এ ১টি, কমপক্ষে ৩টি)",
-             "বোরিং মেশিন দিয়ে নির্দিষ্ট গভীর পর্যন্ত (২০–৩০ মিটার বা কঠিন স্তর পর্যন্ত) বোরহোল করা",
-             "প্রতি ১.৫ মিটার গভীতে SPT চালানো: স্যাম্পলার বসিয়ে ১৫ সেমি ঢুকিয়ে ছেড়ে দেওয়া, এরপর ৪৫ সেমি ঢুকিয়ে শেষ ৩০ সেমির আঘাত গণনা",
-             "প্রতিটি স্তর থেকে Disturbed ও Undisturbed স্যাম্পল সংগ্রহ করে ল্যাবে পাঠানো",
-             "ল্যাবে Grain Size, Atterberg Limits, Consolidation, Direct Shear টেস্ট করানো",
-             "বোরলগ, N-value প্রোফাইল ও সয়েল প্রোফাইলসহ জিওটেকনিক্যাল রিপোর্ট তৈরি"
-            ],
-            "ways": [
-             "SPT (Standard Penetration Test) – ASTM D1586",
-             "CPT (Cone Penetration Test) – দ্রুত ও ধারাবাহিক ডেটা",
-             "Plate Load Test – সরাসরি বহন ক্ষমতা",
-             "Lab Test: Grain Size, Atterberg, Consolidation"
-            ],
-            "sources": [
-             "BNBC 2020, Part 6, Chapter 3",
-             "ASTM D1586 (SPT)",
-             "BUET/DU সয়েল ল্যাব"
-            ],
-            "examples": [
-             "১২ তলা ভবনে ৮ মিটার গভীরে N=৪ পেলে ২৫–৩০ মিটার গভীর পাইল ডিজাইন",
-             "৪ তলা ভবনে ৫ মিটার গভীরে N=১৮ পেলে Raft যথেষ্ট"
-            ],
-            "keyPoints": [
-             "N>30 মানে খুব শক্ত মাটি, N<4 মানে নরম কাদা",
-             "SPT ছাড়া গভীর পাইল ডিজাইন করা যায় না",
-             "স্যাম্পল ৬ মাস পর্যন্ত সংরক্ষণ করতে হবে"
-            ],
-            "mistakes": [
-             "শুধু ১টি বোরহোল করে পুরো সাইট অনুমান করা",
-             "SPT-এর ঘাত সংখ্যা ভুল গোনা বা স্যাম্পল মিস লেবেল করা",
-             "জিওটেক রিপোর্টে ভূগর্ভস্থ পানির স্তর না দেখানো"
-            ],
-            "tips": [
-             "প্রতি বোরহোলে ১টি Undisturbed স্যাম্পল (Shelby Tube) নিন",
-             "ওয়াটার টেবিল বর্ষায় ও শুষ্ক মৌসুমে দুইবার মাপুন",
-             "রিপোর্টে Allowable Bearing Capacity সরাসরি লিখিয়ে নিন"
-            ]
-           },
-           {
-            "id": 2,
-            "en": "Survey Drawing of Project Periphery",
-            "bn": "প্রজেক্টের সীমানা জরিপ নকশা",
-            "phase": "১. সাইট অনুসন্ধান",
-            "duration": "৩–৭ দিন",
-            "what": "জমির প্রকৃত সীমানা, কোণ, বাহুর দৈর্ঘ্য, ভূমির উচ্চতা (Spot Level), কনট্যুর ও আশপাশের রাস্তা-স্থাপনা সমন্বিত টোপোগ্রাফিক সার্ভে নকশা। Total Station বা DGPS দিয়ে প্রতিটি বাউন্ডারি পয়েন্টের Northing-Easting-Elevation রেকর্ড করা হয় এবং CAD-এ প্লট করা হয়।",
-            "uses": "জমির সঠিক ক্ষেত্রফল ও সীমানা যাচাই, বাউন্ডারি পাইলারের অবস্থান নির্ধারণ, ভূমি উন্নয়নের জন্য কাট-ফিল পরিমাণ হিসাব, ড্রেনেজ ঢাল ঠিক করা এবং Master Plan ও Building Layout-এর ভিত্তি তৈরি।",
-            "why": "সীমানা ভুল হলে প্রতিবেশীর সাথে আইনি বিরোধ হয়। ভূমির উচ্চতা না জানলে বর্ষায় পানি জমে। RAJUK অনুমোদনের জন্য সার্ভে নকশা বাধ্যতামূলক।",
-            "steps": [
-             "দলিল, খতিয়ান ও মৌজা ম্যাপ সংগ্রহ করে জমির চিহ্নিত সীমানা যাচাই",
-             "সাইটে পুরনো বাউন্ডারি পিলার বা প্রাকৃতিক চিহ্ন খুঁজে বের করা",
-             "Total Station স্থাপন করে ৩টি পরিচিত কন্ট্রোল পয়েন্ট থেকে Resection করে অবস্থান নিশ্চিত",
-             "প্রতিটি বাউন্ডারি কর্নারে Prism রেখে দূরত্ব ও কোণ মেপে Northing/Easting রেকর্ড",
-             "পুরো জমিতে গ্রিড (যেমন ৫×৫ মি) ফেলে প্রতিটি গ্রিড পয়েন্টের Reduced Level (RL) নেওয়া",
-             "Civil 3D/AutoCAD-এ কনট্যুর, সীমানা ও সেকশন আঁকা এবং লাইসেন্সপ্রাপ্ত সার্ভেয়ারের স্বাক্ষরসহ ফাইনাল ড্রয়িং"
-            ],
-            "ways": [
-             "Total Station Survey (সবচেয়ে প্রচলিত)",
-             "DGPS/GNSS Survey (বড় এলাকায় দ্রুত)",
-             "Topographic Survey + Contour",
-             "Drone Survey (বড় সাইটে)"
-            ],
-            "sources": [
-             "ভূমি অফিস – খতিয়ান/মৌজা ম্যাপ",
-             "লাইসেন্সপ্রাপ্ত Surveyor",
-             "RAJUK Building Rules"
-            ],
-            "examples": [
-             "বসুন্ধরার ১০ কাঠা প্লটে ৩৬টি বাউন্ডারি ও ২০০টি গ্রিড পয়েন্ট লেভেল নেওয়া",
-             "নিচু জমিতে ৪ ফুট বালু ফিলিং দরকার—কনট্যুর থেকে বের করা"
-            ],
-            "keyPoints": [
-             "Northing/Easting ও RL—তিনটাই একসাথে রেকর্ড হতে হবে",
-             "জমির কর্নার ছাড়াও প্রতিটি বাঁক ও পিলারের অবস্থান নিতে হবে",
-             "কনট্যুর ইন্টারভাল সাধারণত ০.৫–১ মিটার"
-            ],
-            "mistakes": [
-             "শুধু জমির চারকোণা মেপে ভেতরের লেভেল না নেওয়া",
-             "পুরনো পিলার না খুঁজে অনুমানে সীমানা ধরা",
-             "ভূগর্ভস্থ বিদ্যুৎ/গ্যাস লাইন সার্ভে না করা"
-            ],
-            "tips": [
-             "সার্ভের আগে প্রতিবেশীকে জানিয়ে সীমানা নিশ্চিত করুন",
-             "কনট্যুর ম্যাপ থেকে ভলিউম ক্যালকুলেশন করিয়ে নিন",
-             "সার্ভের ডেটা CSV ও DWG—দুই ফরম্যাটে রাখুন"
-            ]
-           },
-           {
-            "id": 3,
-            "en": "Master Plan (Full Project 2D)",
-            "bn": "মাস্টার প্ল্যান (পুরো প্রজেক্টের ২ডি নকশা)",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "৩–৬ সপ্তাহ",
-            "what": "পুরো প্রজেক্ট সাইটের ওপর থেকে দেখা ২ডি লেআউট, যেখানে প্রতিটি ব্লক, রাস্তা, পার্কিং, সবুজ এলাকা, প্লে-গ্রাউন্ড, STP, সাবস্টেশন ও ইউটিলিটি করিডর চিহ্নিত থাকে। FAR, MGC, সেটব্যাক ও ফায়ার অ্যাক্সেস সবই এখানে যাচাই করা হয়।",
-            "uses": "জমির সর্বোচ্চ ব্যবহার নিশ্চিত করা, FAR ও MGC মিলিয়ে ভবনের ভলিউম নির্ধারণ, ফায়ার টেন্ডার অ্যাক্সেস ও ইমার্জেন্সি এক্সিট নিশ্চিত করা এবং কর্তৃপক্ষের অনুমোদনের জন্য ডেভেলপমেন্ট প্ল্যান জমা।",
-            "why": "মাস্টার প্ল্যান ভুল হলে FAR/MGC লঙ্ঘন হয়, অনুমোদন আটকে যায়, ফায়ার রুট সংকীর্ণ হয়ে যায়। DAP অনুযায়ী রাস্তার প্রস্থ অনুসারে FAR ভিন্ন।",
-            "steps": [
-             "সার্ভে নকশা, সয়েল রিপোর্ট ও মালিকের চাহিদা সংগ্রহ",
-             "RAJUK/DAP থেকে প্রযোজ্য FAR, MGC, সেটব্যাক ও উচ্চতা সীমা বের করা",
-             "সাইটের অভিগম্যতা, সূর্যালোক, বাতাস ও ড্রেনেজ বিবেচনা করে ব্লকের অবস্থান ঠিক করা",
-             "অভ্যন্তরীণ রাস্তা, পার্কিং, ফায়ার লেন ও পথচারী চলাচলের নেটওয়ার্ক আঁকা",
-             "STP, WTP, সাবস্টেশন, জেনারেটর ও বর্জ্য সংগ্রহের জায়গা নির্ধারণ",
-             "AutoCAD-এ চূড়ান্ত ২ডি মাস্টার প্ল্যান আঁকা, FAR/MGC শিটসহ অনুমোদনে জমা"
-            ],
-            "ways": [
-             "AutoCAD 2D Drafting",
-             "Revit/ArchiCAD (BIM-ভিত্তিক)",
-             "GIS-ভিত্তিক ম্যাপিং (টাউনশিপে)",
-             "SketchUp + Layout (কনসেপ্টে)"
-            ],
-            "sources": [
-             "RAJUK Building Rules 2008",
-             "RAJUK Detailed Area Plan (DAP)",
-             "BNBC 2020, Part 3"
-            ],
-            "examples": [
-             "৫ একরের মাস্টার প্ল্যানে ৬ মিটার ফায়ার লেন, ২টি পার্কিং লট, ১টি STP",
-             "DAP অনুযায়ী ৮০ ফুট রাস্তায় FAR 4.5 ধরে ১০ তলা ভবন"
-            ],
-            "keyPoints": [
-             "FAR = মোট ফ্লোর এরিয়া ÷ প্লট এরিয়া",
-             "MGC = গ্রাউন্ড ফ্লোরের কভারেজ ÷ প্লট এরিয়া",
-             "ফায়ার ট্রাকের জন্য ন্যূনতম ৬ মিটার প্রস্থের রাস্তা"
-            ],
-            "mistakes": [
-             "FAR/MGC হিসাব না করে ব্লক বসানো",
-             "STP/সাবস্টেশনের জন্য জায়গা না রাখা",
-             "ফায়ার লেনে গাছ বা পার্কিং বসিয়ে দেওয়া"
-            ],
-            "tips": [
-             "ভবিষ্যৎ সম্প্রসারণের জন্য ৫–১০% জায়গা ফাঁকা রাখুন",
-             "পার্কিং প্রয়োজন (RAJUK: প্রতি ফ্ল্যাটে কমপক্ষে ১টি)",
-             "সাইট প্ল্যানে North Arrow ও স্কেল রাখতে ভুলবেন না"
-            ]
-           },
-           {
-            "id": 4,
-            "en": "Architectural Plan",
-            "bn": "স্থাপত্য নকশা",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "৪–৮ সপ্তাহ (রিভিশনসহ)",
-            "what": "প্রতিটি ফ্লোরের রুম, দরজা-জানালা, সিঁড়ি, লিফট, করিডোর ও ফাংশনাল জোনিং দেখানো বিস্তারিত স্থাপত্য নকশা। রুমের মাপ, দেয়ালের পুরুত্ব, ফিনিশ লেভেল ও BNBC অনুযায়ী সিঁড়ি-এক্সিট সবই এখানে নির্দিষ্ট থাকে।",
-            "uses": "ক্লায়েন্টকে ডিজাইন উপস্থাপন ও অনুমোদন, স্ট্রাকচারাল ও MEP ডিজাইনারদের কাজের ভিত্তি, ওয়ার্কিং ড্রয়িং ও ফিনিশ শিডিউল তৈরির ভিত্তি।",
-            "why": "ব্যবহারযোগ্যতা (আলো-বাতাস-চলাচল), কোড কমপ্লায়েন্স এবং ক্লায়েন্টের প্রত্যাশা পূরণ না হলে পরে পরিবর্তনে বড় খরচ ও সময় নষ্ট হয়।",
-            "steps": [
-             "মালিকের রুম-সংখ্যা, এরিয়া ও বাজেট সংক্রান্ত চাহিদা লিখিতভাবে নেওয়া (Design Brief)",
-             "কনসেপ্ট স্কেচ ও বাবল ডায়াগ্রামে জোনিং (পাবলিক/প্রাইভেট/সার্ভিস) ঠিক করা",
-             "প্রতিটি ফ্লোরের প্ল্যান আঁকা: রুমের মাপ, দেয়ালের পুরুত্ব, দরজা-জানালার অবস্থান",
-             "সিঁড়ি, লিফট, করিডোর ও এক্সিটের মাপ BNBC অনুযায়ী যাচাই",
-             "ক্লায়েন্ট ফিডব্যাক নিয়ে ২–৩ রাউন্ড সংশোধন",
-             "চূড়ান্ত প্ল্যান অনুমোদনের জন্য কর্তৃপক্ষে জমা"
-            ],
-            "ways": [
-             "2D CAD (AutoCAD)",
-             "BIM (Revit/ArchiCAD)",
-             "Hand Sketch + CAD"
-            ],
-            "sources": [
-             "BNBC 2020, Part 3",
-             "RAJUK Building Rules",
-             "AIA Design Guidelines"
-            ],
-            "examples": [
-             "১২০০ বর্গফুটের ৩ বেডরুম ফ্ল্যাটে প্রতিটি বেডরুমে কমপক্ষে ১টি জানালা",
-             "১০ তলা ভবনে ২টি ফায়ার-রেটেড সিঁড়ি ও ১টি লিফট"
-            ],
-            "keyPoints": [
-             "প্রতি রুমে ক্রস-ভেন্টিলেশনের জন্য কমপক্ষে ২টি জানালা",
-             "সিঁড়ির প্রস্থ আবাসিকে ন্যূনতম ১ মিটার, কমার্শিয়ালে ১.৫ মিটার",
-             "প্রতি ফ্লোরে ২টি এক্সিট থেকে বের হওয়ার পথ থাকতে হবে"
-            ],
-            "mistakes": [
-             "BNBC-এর সিঁড়ি/এক্সিট নিয়ম না মেনে ডিজাইন",
-             "টয়লেট-কিচেনের ভেন্টিলেশন না রাখা",
-             "ক্লায়েন্টের কথা না শুনে ডিজাইন ফাইনাল করা"
-            ],
-            "tips": [
-             "ক্লায়েন্টকে ২–৩টি অপশন দিন, একটি বেছে নিতে বলুন",
-             "স্ট্রাকচারাল গ্রিড ৩–৬ মি স্প্যানে রাখুন—খরচ কমবে",
-             "প্রতিটি ফ্ল্যাটে স্টোররুম ও বাথরুমের ভেন্টিলেশন রাখুন"
-            ]
-           },
-           {
-            "id": 5,
-            "en": "Buildings Layout",
-            "bn": "বিল্ডিং লেআউট",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "১–২ সপ্তাহ",
-            "what": "সাইটের ওপর প্রতিটি বিল্ডিংয়ের সঠিক অবস্থান, কর্নার কোঅর্ডিনেট, গ্রিডলাইন ও সেটব্যাক দেখানো নকশা। বাউন্ডারি থেকে প্রতিটি বিল্ডিংয়ের দূরত্ব এবং কলাম গ্রিডের রেফারেন্স স্পষ্ট থাকে—এটি মাঠে সেটআউটের একমাত্র নির্দেশিকা।",
-            "uses": "মাঠে বিল্ডিংয়ের কর্নার ও কলামের অবস্থান চিহ্নিত করা (Setting Out), সেটব্যাক ও FAR লঙ্ঘন এড়ানো, সার্ভেয়ার ও সাইট ইঞ্জিনিয়ারের রেফারেন্স।",
-            "why": "লেআউট ভুল হলে বিল্ডিং সেটব্যাক লঙ্ঘন করে বা প্রতিবেশী প্লটে ঢুকে যায়। সঠিক সেটআউট ছাড়া ফাউন্ডেশনের গ্রিড ভুল হয়ে পুরো কাঠামোই ভুল জায়গায় বসতে পারে।",
-            "steps": [
-             "সার্ভে নকশা থেকে বাউন্ডারির কোঅর্ডিনেট নেওয়া",
-             "আর্কিটেকচারাল প্ল্যান থেকে প্রতিটি বিল্ডিংয়ের সেটব্যাক মাপা",
-             "প্রতিটি বিল্ডিংয়ের কর্নার ও কলাম গ্রিডের Northing-Easting হিসাব",
-             "কোঅর্ডিনেট চার্ট টেবিল আকারে তৈরি",
-             "মাঠে Total Station দিয়ে পেগ বসিয়ে কর্নার চিহ্নিত",
-             "পেগের অবস্থান আর্কিটেক্ট/ইঞ্জিনিয়ার দিয়ে যাচাই করানো"
-            ],
-            "ways": [
-             "Grid Layout Method",
-             "Coordinate Layout Method",
-             "Offset Method"
-            ],
-            "sources": [
-             "সার্ভে ড্রয়িং",
-             "আর্কিটেকচারাল প্ল্যান",
-             "RAJUK Setback Rules"
-            ],
-            "examples": [
-             "বিল্ডিং-A সামনের রাস্তা থেকে ৩ মিটার সেটব্যাকে",
-             "গ্রিড A-1 থেকে F-8 পর্যন্ত ৩০টি কর্নার পয়েন্টের কোঅর্ডিনেট চার্ট"
-            ],
-            "keyPoints": [
-             "সেটআউটের ভুল মিটারের নিচে রাখতে Total Station ব্যবহার",
-             "প্রতিটি পেগে পেইন্ট দিয়ে নাম্বার লিখে রাখুন",
-             "সেটআউটের পর কর্তৃপক্ষকে দেখিয়ে অনুমোদন নিন"
-            ],
-            "mistakes": [
-             "শুধু টেপ দিয়ে বড় সাইটের সেটআউট",
-             "কোণ ৯০° যাচাই না করা (Pythagoras 3-4-5)",
-             "সেটআউট ডকুমেন্ট না রাখা—পরে বিতর্কে পড়তে হয়"
-            ],
-            "tips": [
-             "প্রতিটি কর্নারে স্থায়ী কংক্রিট পিলার (Benchmark) বসান",
-             "কলাম গ্রিডের নাম দেওয়া A, B, C ও ১, ২, ৩ রাখুন",
-             "সেটআউট ছবি তুলে রাখুন—পরে প্রমাণ হিসেবে কাজে লাগবে"
-            ]
-           },
-           {
-            "id": 6,
-            "en": "Elevation of Buildings",
-            "bn": "বিল্ডিংয়ের এলিভেশন",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "২–৪ সপ্তাহ",
-            "what": "বিল্ডিংয়ের চারটি দিক (Front, Rear, Left, Right) সোজা কোণ থেকে দেখানো নকশা। বাইরের দেয়ালের উচ্চতা, জানালা-দরজার অবস্থান, ব্যালকনি, প্যারাপেট, ফিনিশ ম্যাটেরিয়াল ও রং নির্দিষ্ট থাকে। প্রতিটি লেভেল চিহ্নিত।",
-            "uses": "ক্লায়েন্ট ও কর্তৃপক্ষকে বিল্ডিংয়ের চেহারা দেখিয়ে অনুমোদন, বাইরের ফিনিশ ম্যাটেরিয়ালের পরিমাণ হিসাব, ফায়ার/FAR নিয়মে বিল্ডিংয়ের মোট উচ্চতা যাচাই।",
-            "why": "এলিভেশন ছাড়া বাইরের কাজের নকশা অনুমোদিত হয় না এবং ঠিকাদার জানে না কোথায় কী ফিনিশ হবে। ভুল হলে বিল্ডিংয়ের চেহারা খারাপ হয়।",
-            "steps": [
-             "ফ্লোর প্ল্যান ও প্রতিটি ফ্লোরের উচ্চতা চূড়ান্ত",
-             "চারটি এলিভেশনের আউটলাইন আঁকা",
-             "জানালা, দরজা, ব্যালকনি, প্যারাপেটের অবস্থান বসানো",
-             "প্রতিটি এলিমেন্টের ফিনিশ ম্যাটেরিয়াল ও রং লেবেল",
-             "Ground, Floor, Roof লেভেল চিহ্নিত",
-             "ক্লায়েন্ট ও কর্তৃপক্ষের অনুমোদন"
-            ],
-            "ways": [
-             "2D CAD Elevation",
-             "3D Render সহ Elevation",
-             "BIM (Revit) থেকে অটো-জেনারেট"
-            ],
-            "sources": [
-             "আর্কিটেক্ট",
-             "BNBC 2020, Part 3",
-             "RAJUK Building Height Rules"
-            ],
-            "examples": [
-             "৮ তলা ভবনে প্রতিটি ব্যালকনিতে গ্লাস রেলিং ও টেক্সচার্ড টাইলস",
-             "মোট উচ্চতা ২৮ মিটার—RAJUK FAR-ভিত্তিক সীমার মধ্যে"
-            ],
-            "keyPoints": [
-             "ফায়ার ল্যাডার/এক্সিটের চিহ্ন এলিভেশনে দেখাতে হবে",
-             "সানশেড ও সাইক্লোনে টেকসই ফিনিশ",
-             "প্যারাপেটের উচ্চতা কমপক্ষে ১ মিটার"
-            ],
-            "mistakes": [
-             "ফিনিশ ম্যাটেরিয়াল স্পেসিফিকেশন না দেওয়া",
-             "ভবনের মোট উচ্চতা FAR-এর সাথে না মেলানো",
-             "প্যারাপেটে পানি নিষ্কাশনের ব্যবস্থা না রাখা"
-            ],
-            "tips": [
-             "এলিভেশনে স্পট লাইট, নাম্বার প্লেট, AC outdoor ইউনিটের জায়গা দেখান",
-             "প্রতিটি ফ্যাসাডে আলাদা টেক্সচার রাখলে চেহারা সুন্দর",
-             "3D রেন্ডার দিয়ে ক্লায়েন্টকে দেখান—বোঝা সহজ"
-            ]
-           },
-           {
-            "id": 7,
-            "en": "Section of Buildings",
-            "bn": "বিল্ডিংয়ের সেকশন",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "১–২ সপ্তাহ",
-            "what": "বিল্ডিংকে মাঝখান দিয়ে (A-A, B-B কাট লাইন বরাবর) কেটে ভেতরের দৃশ্য দেখানো নকশা। ফ্লোর-টু-ফ্লোর উচ্চতা, স্ল্যাব, বিম, সিঁড়ি, লিফট শ্যাফট, ফাউন্ডেশনের গভীরতা সব দেখা যায়।",
-            "uses": "স্ট্রাকচারাল ও আর্কিটেকচারাল মাপের সমন্বয় যাচাই, সিঁড়ির আরামদায়কতা নিশ্চিত করা, ক্লিয়ার হাইট ঠিক করা এবং ফাউন্ডেশন ও বেসমেন্টের গভীরতা মাঠে সঠিক বাস্তবায়ন।",
-            "why": "সেকশন ছাড়া স্ল্যাব-বিমের গভীরতা ও ফ্লোর উচ্চতা মিলিয়ে দেখা যায় না; ফলে সিলিং কম বা সিঁড়ি বেশি খাড়া হয়ে যায়। MEP পাইপ/ডাক্টের জায়গাও এখানে ধরা পড়ে।",
-            "steps": [
-             "প্ল্যানে কাট লাইনের অবস্থান ঠিক (সাধারণত সিঁড়ি ও লিফটের মধ্য দিয়ে)",
-             "প্রতিটি ফ্লোরের FFL ও সিলিং লেভেল আঁকা",
-             "স্ল্যাব, বিম, কলামের সাইজ ও গভীরতা দেখানো",
-             "সিঁড়ির রাইজার, ট্রেড ও হেডরুম ক্লিয়ারেন্স মাপা",
-             "লিফট শ্যাফট, বেসমেন্ট ও ফাউন্ডেশনের গভীরতা চিহ্নিত",
-             "স্ট্রাকচারাল ড্রয়িংয়ের সাথে মিলিয়ে চূড়ান্ত"
-            ],
-            "ways": [
-             "Longitudinal Section",
-             "Cross Section",
-             "Wall Section"
-            ],
-            "sources": [
-             "আর্কিটেক্ট",
-             "স্ট্রাকচারাল ইঞ্জিনিয়ার",
-             "BNBC 2020, Part 3 & 6"
-            ],
-            "examples": [
-             "ফ্লোর উচ্চতা ৩.০৫ মি, স্ল্যাব ১৫০ মিমি, ফিনিশ সিলিং ২.৮ মি",
-             "সিঁড়িতে রাইজার ১৭৫ মিমি, ট্রেড ২৫০ মিমি"
-            ],
-            "keyPoints": [
-             "সিঁড়ির হেডরুম ক্লিয়ারেন্স কমপক্ষে ২.১ মি",
-             "মেঝেতে থেকে সিলিং পর্যন্ত ন্যূনতম ২.৪৪ মি",
-             "লিফট শ্যাফটে পিট গভীরতা কমপক্ষে ১.৪ মি"
-            ],
-            "mistakes": [
-             "স্ট্রাকচারাল বিমের গভীরতা সেকশনে না দেখানো",
-             "সিঁড়ির হেডরুম ক্লিয়ারেন্স না চেক করা",
-             "ড্রেন পাইপ ও ডাক্টের জায়গা না রাখা"
-            ],
-            "tips": [
-             "প্রতিটি সেকশনে Floor Finish Level (FFL) দুবার যাচাই করুন",
-             "সেকশনে ম্যাটেরিয়াল হ্যাচিং ব্যবহার করুন",
-             "সিঁড়ির দুটি সেকশন আঁকুন—একটি লম্বালম্বি, একটি আড়াআড়ি"
-            ]
-           },
-           {
-            "id": 8,
-            "en": "Structural Drawing",
-            "bn": "স্ট্রাকচারাল ড্রয়িং",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "৬–১২ সপ্তাহ",
-            "what": "কলাম, বিম, স্ল্যাব, ফাউন্ডেশন ও শিয়ার ওয়ালের মাপ, কংক্রিট গ্রেড, রডের ব্যাস-সংখ্যা-স্পেসিং, ল্যাপ লেংথ, কভার এবং Bar Bending Schedule (BBS) সমন্বিত কাঠামো নকশা। প্রতিটি সদস্যের আলাদা ডিটেইল শিট থাকে।",
-            "uses": "মাঠে রড কাটিং, বাঁকানো, বাঁধা ও ঢালাইয়ের নির্দেশনা, ডিজাইন অনুযায়ী কাঠামোর নিরাপত্তা নিশ্চিত, BBS থেকে স্টিলের পরিমাণ ও খরচ হিসাব, QC-এর চেকলিস্ট।",
-            "why": "রডের ডিটেইল ভুল হলে কলাম-বিম দুর্বল হয়ে ধসের ঝুঁকি তৈরি হয়। বাংলাদেশ ভূমিকম্পপ্রবণ—BNBC 2020 ডাক্টিল ডিটেইলিং বাধ্যতামূলক।",
-            "steps": [
-             "সয়েল রিপোর্ট ও আর্কিটেকচারাল লেআউট থেকে লোড ও স্প্যান নির্ধারণ",
-             "ETABS/SAFE/STAAD-এ ৩ডি মডেল তৈরি করে লোড অ্যানালাইসিস",
-             "প্রতিটি কলাম, বিম, স্ল্যাব ও ফাউন্ডেশন ডিজাইন (রড, সংখ্যা, স্পেসিং)",
-             "Bar Bending Schedule (BBS) তৈরি: প্রতিটি বারের Mark, Shape, Length, Quantity",
-             "কলাম-বিম জয়েন্ট, ল্যাপ লেংথ, কভার ডিটেইল আঁকা",
-             "থার্ড-পার্টি চেকের মাধ্যমে যাচাই করে সাইটে ইস্যু"
-            ],
-            "ways": [
-             "ETABS + SAFE + AutoCAD",
-             "STAAD.Pro + RCDC",
-             "Revit Structure + Robot",
-             "হাতে হিসাব + CAD (ছোট প্রজেক্টে)"
-            ],
-            "sources": [
-             "BNBC 2020, Part 6",
-             "ACI 318",
-             "স্ট্রাকচারাল ইঞ্জিনিয়ার (IEB সদস্য)"
-            ],
-            "examples": [
-             "কলাম C1: ৫০০×৫০০, ৮-২০ মিমি মেইন রড, ১০ মিমি টাই @১৫০",
-             "বিম B-12: ২৫০×৪৫০, টপ ৩-১৬, বটম ৪-২০, স্টিরাপ ৮ মিমি @১০০/১৫০"
-            ],
-            "keyPoints": [
-             "কলামে ন্যূনতম ৪টি মেইন রড ও ১% স্টিল",
-             "ল্যাপ লেংথ = ৫০×ব্যবহৃত রডের ব্যাস (কমপক্ষে)",
-             "কভার: স্ল্যাবে ২০ মিমি, বিমে ২৫ মিমি, কলামে ৪০ মিমি"
-            ],
-            "mistakes": [
-             "BBS না বানিয়ে সাইটে রড কাটা",
-             "স্প্লাইস (ল্যাপ) একই জায়গায় রাখা",
-             "শিয়ার ওয়ালের ডিটেইল বাদ দেওয়া"
-            ],
-            "tips": [
-             "সাইটে দেওয়ার আগে BBS-এ ইঞ্জিনিয়ার ও ঠিকাদারের সই নিন",
-             "প্রতি ফ্লোরের জন্য আলাদা শিট রাখুন—আপডেট সহজ হবে",
-             "ল্যাপ জোন কখনো স্প্যানের মাঝখানে রাখবেন না"
-            ]
-           },
-           {
-            "id": 9,
-            "en": "Working Drawing (Ar.)",
-            "bn": "ওয়ার্কিং ড্রয়িং (আর্কিটেকচার)",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "৩–৫ সপ্তাহ (প্রজেক্টে চলমান)",
-            "what": "আর্কিটেকচারাল কাজের জন্য মিস্ত্রি ও ঠিকাদার-বান্ধব বিস্তারিত ড্রয়িং, যেখানে প্রতিটি রুমের মাপ, দেয়ালের পুরুত্ব, দরজা-জানালার শিডিউল, টাইলস লেআউট, বাথরুম ডিটেইল, সিলিং প্ল্যান ও ফিনিশ শিডিউল থাকে।",
-            "uses": "মাঠে ইট গাঁথা, প্লাস্টার, টাইলস, কাঠ, অ্যালুমিনিয়ামের কাজ সঠিক মাপে করা, MEP ও স্ট্রাকচারের সাথে কনফ্লিক্ট এড়ানো এবং QC-এর ইন্সপেকশন রেফারেন্স।",
-            "why": "ওয়ার্কিং ড্রয়িং ছাড়া মিস্ত্রি অনুমানে কাজ করে—দরজা-জানালার মাপ ভুল হয়, টাইলস নষ্ট হয়, পরে ভাঙা-গড়ার খরচ বাড়ে।",
-            "steps": [
-             "অনুমোদিত আর্কিটেকচারাল প্ল্যান ও সেকশন সংগ্রহ",
-             "প্রতিটি রুমের ফিনিশ শিডিউল (মেঝে, দেয়াল, সিলিং)",
-             "দরজা-জানালার শিডিউল: সাইজ, ম্যাটেরিয়াল, ফায়ার রেটিং, হার্ডওয়্যার",
-             "বাথরুম-কিচেনের ডিটেইল: টাইলস লেআউট, ড্রেন ঢাল, ওয়াল টাইল উচ্চতা",
-             "সিলিং ও ফলস সিলিং প্ল্যান, লাইট পয়েন্টের অবস্থান",
-             "MEP ড্রয়িংয়ের সাথে ওভারলে চেক করে কনফ্লিক্ট সমাধান"
-            ],
-            "ways": [
-             "Plan + Section + Detail Sheet",
-             "Door-Window Schedule",
-             "Finish Schedule",
-             "BIM-ভিত্তিক Clash-Free Drawing"
-            ],
-            "sources": [
-             "আর্কিটেক্ট",
-             "BNBC 2020, Part 3",
-             "Construction Drawing Standards (NCS)"
-            ],
-            "examples": [
-             "বাথরুমের টাইলস ডিটেইলে ফ্লোর স্লোপ ১:১০০, ওয়াল টাইল ৭ ফুট",
-             "দরজা D1: ৩'×৭' ফ্ল্যাশ ডোর, ফায়ার রেটেড; D2: ২'৬\"×৭' কাঠ"
-            ],
-            "keyPoints": [
-             "প্রতিটি শিটে স্কেল ও রিভিশন নম্বর থাকতে হবে",
-             "ফিনিশ শিডিউল ছাড়া ওয়ার্কিং ড্রয়িং অসম্পূর্ণ",
-             "সাইটে ইস্যুর তারিখ ও গ্রহীতার সই রাখুন"
-            ],
-            "mistakes": [
-             "শুধু প্ল্যান দিয়ে কাজ চালানো—ডিটেইল ছাড়া",
-             "MEP ড্রয়িংয়ের সাথে সমন্বয় না করা",
-             "রিভিশন কন্ট্রোল না রাখা"
-            ],
-            "tips": [
-             "প্রতিটি রুমের জন্য একটি Finish Sheet বানান",
-             "দরজা-জানালার শিডিউল সাইটে বড় প্রিন্টে টাঙান",
-             "৩ডি ভিউ দিয়ে মিস্ত্রিকে বোঝান"
-            ]
-           },
-           {
-            "id": 10,
-            "en": "Electrical Drawing",
-            "bn": "ইলেকট্রিক্যাল ড্রয়িং",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "২–৪ সপ্তাহ",
-            "what": "বিল্ডিংয়ের লাইটিং, সকেট, এসি পয়েন্ট, ডিস্ট্রিবিউশন বোর্ড (DB), মেইন প্যানেল, ক্যাবল রুট ও আর্থিং দেখানো বিদ্যুৎ নকশা। সাথে লোড ক্যালকুলেশন শিট ও সিঙ্গেল লাইন ডায়াগ্রাম (SLD)।",
-            "uses": "ঢালাইয়ের আগে কনডুইট ও বক্স বসানো, সঠিক ক্যাবল সাইজ ও ব্রেকার নির্বাচন, লোড অনুযায়ী ট্রান্সফরমার/জেনারেটর সাইজ ঠিক করা।",
-            "why": "ভুল লোড ক্যালকুলেশনে ক্যাবল গরম হয়ে আগুন লাগতে পারে; আন্ডার-সাইজড ক্যাবলে ভোল্টেজ ড্রপ বেড়ে যন্ত্রপাতি নষ্ট হয়।",
-            "steps": [
-             "লাইট, ফ্যান, সকেট, এসি, পাওয়ার আউটলেটের তালিকা করে লোড ক্যালকুলেশন",
-             "প্রতিটি ফ্লোরে DB এবং গ্রাউন্ড ফ্লোরে মেইন প্যানেলের অবস্থান",
-             "লাইটিং ও পাওয়ার লেআউট: প্রতিটি পয়েন্ট, সুইচ, সার্কিট নম্বর",
-             "ক্যাবল রুট ও সাইজ নির্ধারণ, ভোল্টেজ ড্রপ ও শর্ট-সার্কিট হিসাব",
-             "আর্থিং ও লাইটনিং প্রোটেকশন ডিজাইন",
-             "সিঙ্গেল লাইন ডায়াগ্রাম (SLD) ও প্যানেল শিডিউল অনুমোদন"
-            ],
-            "ways": [
-             "Lighting Layout + Power Layout",
-             "Single Line Diagram (SLD)",
-             "Panel Schedule",
-             "Revit MEP-ভিত্তিক ডিজাইন"
-            ],
-            "sources": [
-             "BNBC 2020, Part 8",
-             "IEC 60364 / NEC",
-             "DPDC/DESCO নিয়ম"
-            ],
-            "examples": [
-             "৩ বেডরুম ফ্ল্যাটে ২টি এসি (২০ Amp), গিজার (১৫ Amp), সাধারণ সকেট (১০ Amp)",
-             "১০ তলা ভবনে ৪০০ Amp MCCB + ৩০০ kVA জেনারেটরের SLD"
-            ],
-            "keyPoints": [
-             "ভোল্টেজ ড্রপ সর্বোচ্চ ৩% (BNBC)",
-             "প্রতিটি ফ্ল্যাটে ১টি DB, একটি সার্কিটে সর্বোচ্চ ১০ পয়েন্ট",
-             "বাথরুম/কিচেনে আলাদা RCCB সার্কিট"
-            ],
-            "mistakes": [
-             "এসির জন্য আলাদা সার্কিট না রাখা",
-             "ক্যাবল সাইজ লোড অনুযায়ী না হওয়া",
-             "আর্থিং রেজিস্ট্যান্স মাপা না হওয়া"
-            ],
-            "tips": [
-             "লাইট পয়েন্টে জংশন বক্স ৭৫ মিমি করে রাখুন",
-             "প্রতিটি ফ্লোরে ১টি করে ফায়ার অ্যালার্ম কন্ডুইট রাখুন",
-             "SLD-এ ভবিষ্যতের জন্য ২০% স্পেয়ার সার্কিট রাখুন"
-            ]
-           },
-           {
-            "id": 11,
-            "en": "Plumbing & Sanitary Drawing",
-            "bn": "প্লাম্বিং ও স্যানিটারি ড্রয়িং",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "২–৪ সপ্তাহ",
-            "what": "পানি সরবরাহ (Cold & Hot) ও ড্রেনেজ-স্যানিটারি সিস্টেমের পাইপ নকশা। ওভারহেড ট্যাংক, পাম্প, রাইজার, ফিক্সচার, ওয়েস্ট পাইপ, ভেন্ট পাইপ ও ঢাল সব দেখানো থাকে। রাইজার ডায়াগ্রামে প্রতিটি ফ্লোরের সংযোগ ও পাইপ সাইজ থাকে।",
-            "uses": "ঢালাইয়ের আগে স্লিভ ও পাইপ বসানো, সঠিক পাইপ সাইজ ও ঢালে পানি সরবরাহ ও ড্রেনেজ নিশ্চিত, ফিক্সচারের চাপ ও প্রবাহ ঠিক রাখা।",
-            "why": "ভুল ঢালে পানি জমে দুর্গন্ধ ও লিকেজ হয়; ছোট পাইপে চাপ কমে ফিক্সচার ঠিকমতো কাজ করে না। ঢালাইয়ের পর পাইপ পরিবর্তন করতে হলে স্ল্যাব ভাঙতে হয়।",
-            "steps": [
-             "প্রতিটি ফিক্সচারের WSFU হিসাব করে মোট পানির চাহিদা",
-             "ওভারহেড ট্যাংক ও আন্ডারগ্রাউন্ড রিজার্ভারের সাইজ নির্ধারণ",
-             "রাইজার ও ব্রাঞ্চ লাইনের সাইজ ও রুট",
-             "ড্রেনেজ পাইপের ঢাল (সাধারণত ১:১০০) ও ভেন্ট পাইপ ডিজাইন",
-             "ঢালাইয়ের আগে স্ল্যাবে স্লিভ ও ওয়ালে চেজ বসানো",
-             "প্রেসার টেস্ট (১০ bar, ১ ঘণ্টা) করে লিক চেক"
-            ],
-            "ways": [
-             "CPVC/PPR (গরম-ঠান্ডা পানির)",
-             "PVC (ড্রেনেজ-ওয়েস্ট)",
-             "Gravity System vs Pumped System",
-             "Riser Diagram + Floor Plan"
-            ],
-            "sources": [
-             "BNBC 2020, Part 8",
-             "International Plumbing Code (IPC)",
-             "WASA Design Guidelines"
-            ],
-            "examples": [
-             "১০ তলায় প্রতিটি ফ্লোরে ১.৫\" Cold Water রাইজার + ৪\" Soil পাইপ",
-             "বাথরুমের ফ্লোরে ১:১০০ ঢালে ড্রেন বসানো"
-            ],
-            "keyPoints": [
-             "Cold water velocity সর্বোচ্চ ১.৫–২ মি/সে",
-             "প্রতিটি ১০০ ফুট দৈর্ঘ্যে ভেন্ট পাইপ লাগবে",
-             "ওভারহেড ট্যাংকে ১ দিনের স্টোরেজ ধরা হয়"
-            ],
-            "mistakes": [
-             "স্লিভ না বসিয়ে ঢালাই দেওয়া",
-             "ড্রেন পাইপে ঢাল না রাখা",
-             "হট ওয়াটারের জন্য আলাদা পাইপ না রাখা"
-            ],
-            "tips": [
-             "স্ল্যাবে জায়গায় PVC কভারসহ ড্রেন পাইপ রাখুন",
-             "প্রতিটি বাথরুমে আলাদা শাট-অফ ভালভ",
-             "বর্ষার পানির জন্য আলাদা ড্রেন লাইন রাখুন"
-            ]
-           },
-           {
-            "id": 12,
-            "en": "Sewerage System & Drainage Line",
-            "bn": "পয়ঃনিষ্কাশন ও ড্রেনেজ লাইন",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "২–৩ সপ্তাহ",
-            "what": "ময়লা পানি (Black Water), ধূসর পানি (Grey Water) ও বৃষ্টির পানি (Storm Water) বের করার ভূগর্ভস্থ ও বাহ্যিক ড্রেনেজ নেটওয়ার্কের নকশা। ম্যানহোল, সেপটিক ট্যাংক/STP, ঢাল, পাইপ সাইজ ও লেভেল স্পষ্ট।",
-            "uses": "বর্জ্য পানি নিরাপদে STP বা পৌর নেটওয়ার্কে পৌঁছানো, বৃষ্টির পানি জমা না হওয়া নিশ্চিত এবং ভূগর্ভস্থ পানি দূষণ রোধ।",
-            "why": "ঢাল ভুল বা পাইপ ছোট হলে বর্জ্য পানি জমে দুর্গন্ধ ও রোগের প্রাদুর্ভাব; ভিত্তির কাছে পানি জমলে ফাউন্ডেশন দুর্বল।",
-            "steps": [
-             "প্রতিটি ফ্লোরের ফিক্সচার থেকে আসা বর্জ্যের পরিমাণ হিসাব",
-             "ভূগর্ভস্থ পাইপের রুট, ম্যানহোলের অবস্থান ও গভীরতা নির্ধারণ",
-             "পাইপ সাইজ ও ঢাল ঠিক (ময়লা পানিতে ১:১০০, বৃষ্টিতে ১:১৫০)",
-             "সেপটিক ট্যাংক বা STP-এর ক্যাপাসিটি ও অবস্থান",
-             "নির্মাণের সময় লেভেল যাচাই করে পাইপ বসানো",
-             "Water Test ও Air Test করে লিক ও প্রবাহ যাচাই"
-            ],
-            "ways": [
-             "Separate System (আলাদা)",
-             "Combined System (একসাথে)",
-             "Gravity Flow vs Pumped System"
-            ],
-            "sources": [
-             "BNBC 2020, Part 8",
-             "পরিবেশ অধিদপ্তর (DoE) – ECR 1997",
-             "সিটি কর্পোরেশন/ওয়াসা নিয়ম"
-            ],
-            "examples": [
-             "১৫০ ফ্ল্যাটের ভবনে ৬\" মেইন সয়েল পাইপ ১:১০০ ঢালে STP-তে",
-             "ছাদের বৃষ্টির পানি ৪\" ডাউনপাইপ দিয়ে সাইট ড্রেনে"
-            ],
-            "keyPoints": [
-             "Black Water (কমোড) ও Grey Water (বেসিন) আলাদা করা ভালো",
-             "ম্যানহোল প্রতি ৩০ মি পর পর",
-             "STP-এর ক্যাপাসিটি = দৈনিক ব্যবহার × ০.৮"
-            ],
-            "mistakes": [
-             "বৃষ্টির পানি স্যনিটারি লাইনে মেশানো",
-             "ম্যানহোলে সিঁড়ি (step) না রাখা",
-             "ড্রেন পাইপে সঠিক ঢাল না রাখা"
-            ],
-            "tips": [
-             "STP-এর আগে grease trap রাখুন—রক্ষণাবেক্ষণ সহজ হবে",
-             "ড্রেন পাইপ কমপক্ষে ৩ ফুট গভীরে রাখুন",
-             "বৃষ্টির পানির জন্য আলাদা সেটলিং ট্যাংক বিবেচনা করুন"
-            ]
-           },
-           {
-            "id": 13,
-            "en": "WTP, STP, ETP Drawing",
-            "bn": "পানি, পয়ঃ ও বর্জ্য শোধনাগার ড্রয়িং",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "৪–৮ সপ্তাহ",
-            "what": "WTP দিয়ে কূপের পানি থেকে আয়রন-আর্সেনিক সরিয়ে পানযোগ্য করা, STP দিয়ে ময়লা পানি শোধন এবং ETP দিয়ে শিল্প বর্জ্য শোধনের সম্পূর্ণ নকশা। ট্যাংক, পাম্প, ব্লোয়ার, ফিল্টার ও পাইপিং লেআউট থাকে।",
-            "uses": "পানিকে নিরাপদ করা, বর্জ্য পানি পরিবেশে ফেলার আগে নির্ধারিত মানে শোধন এবং পরিবেশ অধিদপ্তরের ছাড়পত্র (NOC) পাওয়া।",
-            "why": "শোধন ছাড়া বর্জ্য ফেলা আইনত দণ্ডনীয় এবং জনস্বাস্থ্যের জন্য বিপজ্জনক। STP ছাড়া বহুতল আবাসিক প্রজেক্টের অনুমোদন পাওয়া যায় না।",
-            "steps": [
-             "দৈনিক পানির চাহিদা ও বর্জ্যের পরিমাণ (m³/day) হিসাব",
-             "পানি/বর্জ্যের গুণাগুণ পরীক্ষা করে প্রযুক্তি নির্বাচন",
-             "ট্যাংকের সংখ্যা, আকার ও পাম্পের ক্যাপাসিটি",
-             "পাইপিং, ব্লোয়ার ও ইলেকট্রিক্যাল লেআউটসহ P&ID ডায়াগ্রাম",
-             "নির্মাণ ও কমিশনিং করে ট্রায়াল",
-             "ল্যাব টেস্টে আউটলেটের মান যাচাই করে DoE-তে NOC আবেদন"
-            ],
-            "ways": [
-             "Conventional Activated Sludge (ASP)",
-             "MBBR",
-             "SBR",
-             "MBR (Membrane Bioreactor)"
-            ],
-            "sources": [
-             "পরিবেশ অধিদপ্তর (DoE) – ECR 1997",
-             "BNBC 2020, Part 8",
-             "WHO Drinking-water Guidelines"
-            ],
-            "examples": [
-             "৫০০ ফ্ল্যাটে ৩০০ m³/day ক্যাপাসিটির MBBR-ভিত্তিক STP",
-             "গভীর নলকূপে আয়রন ৫ mg/L পেলে Oxidation + Filtration WTP"
-            ],
-            "keyPoints": [
-             "STP ক্যাপাসিটি = জনসংখ্যা × ১২০ L/day",
-             "BOD5 আউটলেটে ৩০ mg/L এর নিচে রাখতে হবে (ECR)",
-             "WTP-তে আয়রন ০.৩ mg/L এর নিচে নামাতে হবে"
-            ],
-            "mistakes": [
-             "STP-এর জায়গা বেসমেন্টে না রাখা",
-             "স্লাজ ডিসপোজালের ব্যবস্থা না রাখা",
-             "কমিশনিং না করে অনুমোদন নেওয়ার চেষ্টা"
-            ],
-            "tips": [
-             "STP-এর জন্য কমপক্ষে ৫% সাইট এরিয়া রাখুন",
-             "ব্লোয়ারের জন্য শব্দ নিরোধক চেম্বার রাখুন",
-             "অপারেটরের জন্য প্রশিক্ষণের ব্যবস্থা রাখুন"
-            ]
-           },
-           {
-            "id": 14,
-            "en": "HVAC Drawing",
-            "bn": "এইচভিএসি (তাপ, বায়ু চলাচল ও শীতাতপ) ড্রয়িং",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "৩–৫ সপ্তাহ",
-            "what": "Heating, Ventilation & Air Conditioning সিস্টেমের নকশা—কুলিং লোড, ডাক্ট সাইজ, AHU/FCU, ডিফিউজার, রিটার্ন এয়ার, ফ্রেশ এয়ার ও এক্সহস্ট ফ্যান দেখানো। বেসমেন্টের ভেন্টিলেশন ও স্মোক এক্সট্র্যাকশনও এর অন্তর্ভুক্ত।",
-            "uses": "ভেতরের তাপমাত্রা ও আর্দ্রতা আরামদায়ক রাখা, বেসমেন্টে ফ্রেশ এয়ার সরবরাহ, এবং ফায়ার ইমার্জেন্সিতে ধোঁয়া নিয়ন্ত্রণ।",
-            "why": "ঢালাইয়ের পর ডাক্টের জন্য জায়গা না থাকলে সিলিং কমাতে হয়; বেসমেন্টে ভেন্টিলেশন না থাকলে আগুনে ধোঁয়ায় মৃত্যুর ঝুঁকি।",
-            "steps": [
-             "প্রতিটি রুমের কুলিং লোড (দেয়াল, ছাদ, জানালা, মানুষ, যন্ত্র)",
-             "সিস্টেম নির্বাচন (Split, VRF, Chiller) ও ইউনিটের ক্যাপাসিটি",
-             "ডাক্টের রুট, সাইজ ও ফিটিং ডিজাইন (Equal Friction পদ্ধতি)",
-             "ডিফিউজার, রিটার্ন গ্রিল ও ফ্রেশ এয়ার ইনটেকের অবস্থান",
-             "বেসমেন্ট-করিডোরে এক্সহস্ট ফ্যান ও স্মোক এক্সট্র্যাক্ট ডিজাইন",
-             "ফায়ার ডাম্পার ও কন্ট্রোল সিস্টেম যোগ করে সমন্বয়"
-            ],
-            "ways": [
-             "VRF (মাল্টি-ফ্লোর আবাসিকে জনপ্রিয়)",
-             "Chiller + AHU (কমার্শিয়াল)",
-             "Split AC (ছোট স্পেস)",
-             "Package / Ductable Split"
-            ],
-            "sources": [
-             "ASHRAE Handbook",
-             "BNBC 2020, Part 8",
-             "SMACNA Duct Standards"
-            ],
-            "examples": [
-             "২০০০ বর্গফুট অফিসে ১০ টন কুলিং লোডে ২টি ৫-টন ডাক্টেবল স্প্লিট",
-             "বেসমেন্টে ৬ এয়ার-চেঞ্জ/ঘণ্টা নিশ্চিত করতে ২টি এক্সহস্ট ফ্যান"
-            ],
-            "keyPoints": [
-             "রেসিডেন্সিয়াল কুলিং লোড: ৮০–১২০ W/m²",
-             "বেসমেন্টে ন্যূনতম ৬ এয়ার চেঞ্জ/ঘণ্টা",
-             "ডাক্টে বাতাসের গতি ৫–৮ m/s এর মধ্যে"
-            ],
-            "mistakes": [
-             "ডাক্টের জায়গা স্ট্রাকচারে না রাখা",
-             "ফ্রেশ এয়ার ইনটেক ও এক্সহস্ট একই জায়গায় রাখা",
-             "ফায়ার ডাম্পার না বসানো"
-            ],
-            "tips": [
-             "ডাক্টের জন্য ৫০০–৬০০ মিমি স্পেস সিলিংয়ের নিচে রাখুন",
-             "VRF সিস্টেমে হিট রিকভারি ভেন্টিলেশন (HRV) ব্যবহার করুন",
-             "ফায়ার অ্যালার্মের সাথে HVAC শাটডাউন ইন্টারলক করুন"
-            ]
-           },
-           {
-            "id": 15,
-            "en": "Firefighting & Detection System Drawing",
-            "bn": "অগ্নি নির্বাপণ ও শনাক্তকরণ ড্রয়িং",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "৪–৬ সপ্তাহ",
-            "what": "স্বয়ংক্রিয় স্প্রিংকলার, ওয়েট রাইজার, হোজ রিল, ফায়ার হাইড্র্যান্ট, স্মোক/হিট ডিটেক্টর, ফায়ার অ্যালার্ম প্যানেল, এক্সটিংগুইশার ও ফায়ার পাম্প (Jockey, Main, Diesel) সমন্বিত সম্পূর্ণ অগ্নি নিরাপত্তা নকশা।",
-            "uses": "আগুন লাগলে দ্রুত শনাক্তকরণ, স্বয়ংক্রিয়ভাবে পানি ছিটিয়ে নিয়ন্ত্রণ এবং বাসিন্দাদের নিরাপদে বের হওয়ার পথ নিশ্চিত। ফায়ার সার্ভিসের NOC ও বিল্ডিং ব্যবহারের অনুমতির জন্য বাধ্যতামূলক।",
-            "why": "বাংলাদেশে বহুতল ভবনে আগুনে মৃত্যুর বড় কারণ শনাক্তকরণ ও নির্বাপণ ব্যবস্থার অভাব। BNBC Part 4 ও NFPA অনুযায়ী নির্দিষ্ট উচ্চতার ওপর স্বয়ংক্রিয় স্প্রিংকলার ও অ্যালার্ম বাধ্যতামূলক।",
-            "steps": [
-             "বিল্ডিংয়ের ব্যবহার ও ঝুঁকি শ্রেণি (Light/Ordinary/Extra Hazard) নির্ধারণ",
-             "স্প্রিংকলার হেডের সংখ্যা ও অবস্থান (লাইট হ্যাজার্ডে ১২.১ m²/হেড)",
-             "পাইপ সাইজ ও রাইজার ডিজাইন (হাইড্রোলিক হিসাব)",
-             "ফায়ার পাম্প ও রিজার্ভারের ক্যাপাসিটি (সাধারণত ৩০ মিনিটের জন্য)",
-             "ডিটেক্টর, অ্যালার্ম প্যানেল ও এক্সিট সাইনেজের লেআউট",
-             "ফায়ার সার্ভিসের পরিদর্শন ও NOC নেওয়া"
-            ],
-            "ways": [
-             "Wet Riser System",
-             "Automatic Sprinkler (NFPA 13)",
-             "Fire Alarm & Detection (NFPA 72)",
-             "Gas Suppression (সার্ভার রুম)"
-            ],
-            "sources": [
-             "BNBC 2020, Part 4",
-             "NFPA 13, NFPA 72",
-             "Bangladesh Fire Service (FSCD)"
-            ],
-            "examples": [
-             "১০ তলা আবাসিক ভবনে প্রতি ফ্লোরে ২টি হোজ রিল ও সিঁড়িতে ওয়েট রাইজার",
-             "বেসমেন্ট পার্কিংয়ে ৬৮°C ফিউজিবল লিঙ্ক স্প্রিংকলার @ ৩ মি স্পেসিং"
-            ],
-            "keyPoints": [
-             "১০ তলা বা ৩৩ মিটারের বেশি হলে স্প্রিংকলার বাধ্যতামূলক",
-             "ফায়ার পাম্পে Jockey + Main Electric + Diesel backup",
-             "প্রতি ফ্লোরে ন্যূনতম ২টি এক্সিট সিঁড়ি"
-            ],
-            "mistakes": [
-             "ফায়ার রিজার্ভার সাইজ ছোট রাখা",
-             "ফায়ার সিঁড়িতে ধোঁয়া আটকানোর ব্যবস্থা না রাখা",
-             "ফায়ার ডোর (৬০ মিনিট রেটেড) না বসানো"
-            ],
-            "tips": [
-             "সিঁড়িতে প্রেসারাইজেশন সিস্টেম রাখুন—ধোঁয়া ঢুকবে না",
-             "প্রতি ৬ মাসে ফায়ার পাম্প টেস্ট করুন",
-             "স্প্রিংকলার হেড রঙ দিয়ে টেম্পারেচার চিহ্নিত রাখুন"
-            ]
-           },
-           {
-            "id": 16,
-            "en": "3D Model",
-            "bn": "থ্রিডি মডেল",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "২–৬ সপ্তাহ",
-            "what": "বিল্ডিংয়ের ডিজিটাল ত্রিমাত্রিক মডেল, যেখানে কাঠামো, দেয়াল, ফিনিশ, জানালা-দরজা ও ইন্টেরিয়র বাস্তবের মতো দেখা যায়। BIM মডেলে প্রতিটি এলিমেন্টের তথ্য (ম্যাটেরিয়াল, সাইজ, কোস্ট) যুক্ত থাকে।",
-            "uses": "ক্লায়েন্টকে ডিজাইন বোঝানো, ডিজাইন অপশন তুলনা, MEP ও স্ট্রাকচারের ক্ল্যাশ ডিটেকশন এবং মার্কেটিং/সেলসের জন্য ভিজ্যুয়াল তৈরি।",
-            "why": "২ডি ড্রয়িংয়ে লুকানো ত্রুটি (বিম ও ডাক্ট একই জায়গায়) ৩ডি মডেলে ধরা পড়ে—নির্মাণের আগেই সমাধান হয়। ক্লায়েন্ট দ্রুত সিদ্ধান্ত নেয়।",
-            "steps": [
-             "আর্কিটেকচারাল প্ল্যান ও সেকশন থেকে মডেলিং শুরু",
-             "দেয়াল, মেঝে, ছাদ, জানালা-দরজা মডেল",
-             "স্ট্রাকচারাল ও MEP এলিমেন্ট যুক্ত (BIM হলে)",
-             "ম্যাটেরিয়াল ও টেক্সচার অ্যাসাইন",
-             "আলো ও ক্যামেরা সেট করে রেন্ডার/ওয়াকথ্রু",
-             "ক্ল্যাশ ডিটেকশন ও ফিডব্যাক নিয়ে সংশোধন"
-            ],
-            "ways": [
-             "SketchUp (কনসেপ্ট)",
-             "Revit (BIM)",
-             "ArchiCAD",
-             "3ds Max + V-Ray"
-            ],
-            "sources": [
-             "আর্কিটেক্ট/৩ডি ভিজুয়ালাইজার",
-             "BIM Standard (ISO 19650)"
-            ],
-            "examples": [
-             "ক্লায়েন্টকে ৩টি ভিন্ন ফ্যাসাড ডিজাইনের ৩ডি রেন্ডার দেখিয়ে পছন্দ করানো",
-             "BIM ক্ল্যাশ ডিটেকশনে ধরা পড়ল—একটি বিম ও বড় ডাক্ট একই উচ্চতায়"
-            ],
-            "keyPoints": [
-             "BIM = 3D + তথ্য (Time = 4D, Cost = 5D)",
-             "LOD (Level of Detail) ২০০–৪০০ সাধারণত যথেষ্ট",
-             "ক্ল্যাশ ডিটেকশন Navisworks-এ করা যায়"
-            ],
-            "mistakes": [
-             "শুধু দেখতে সুন্দর কিন্তু মাপ ভুল মডেল",
-             "MEP এলিমেন্ট না ঢোকানো",
-             "একই মডেলে ২ডি ড্রয়িংয়ের সাথে অমিল রাখা"
-            ],
-            "tips": [
-             "প্রতি সপ্তাহে ক্লায়েন্টকে মডেলের আপডেট দেখান",
-             "ম্যাটেরিয়াল লাইব্রেরি সঠিক ব্র্যান্ডের রাখুন",
-             "রেন্ডার ওয়াকথ্রু ভিডিওসহ দিন—বিক্রয় বাড়বে"
-            ]
-           },
-           {
-            "id": 17,
-            "en": "Animation Video",
-            "bn": "অ্যানিমেশন ভিডিও",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "১–৩ সপ্তাহ",
-            "what": "৩ডি মডেল থেকে তৈরি ভিডিও ওয়াকথ্রু বা ফ্লাইথ্রু, যেখানে ক্যামেরা বিল্ডিংয়ের ভেতরে-বাইরে ঘোরে এবং বাস্তবের মতো আলো-শেডো দেখায়। নারেশন ও মিউজিক যোগ করা যায়।",
-            "uses": "মার্কেটিং ও বিক্রয় উপস্থাপনা, ইনভেস্টরকে প্রজেক্টের ভিশন বোঝানো এবং কর্তৃপক্ষের কাছে ডিজাইন উপস্থাপন।",
-            "why": "স্থির ছবি বা প্ল্যানের চেয়ে ভিডিও অনেক বেশি আবেগ ও বোঝাপড়া তৈরি করে; বিক্রয় ও অনুমোদনের গতি বাড়ায়।",
-            "steps": [
-             "স্ক্রিপ্ট ও ক্যামেরা মুভমেন্টের প্ল্যান",
-             "৩ডি মডেল ফাইনালাইজ",
-             "ক্যামেরা পথ অ্যানিমেট",
-             "লাইটিং ও ম্যাটেরিয়াল টিউন",
-             "রেন্ডার আউটপুট (Full HD/4K)",
-             "সাউন্ড, টেক্সট ও এডিট করে ফাইনাল ভিডিও"
-            ],
-            "ways": [
-             "Walkthrough",
-             "Flythrough",
-             "Construction Sequence Animation",
-             "Time-lapse (নির্মাণ অগ্রগতি)"
-            ],
-            "sources": [
-             "৩ডি ভিজুয়ালাইজেশন স্টুডিও",
-             "Motion Graphics Artist"
-            ],
-            "examples": [
-             "২ মিনিটের ফ্লাইথ্রু—পুরো টাউনশিপের ওপর দিয়ে ক্যামেরা ঘোরে",
-             "একটি ফ্ল্যাটের ভেতরের ওয়াকথ্রু—ক্লায়েন্টকে রুম দেখানো"
-            ],
-            "keyPoints": [
-             "একটি ভালো ফ্লাইথ্রু ৯০–১২০ সেকেন্ডের মধ্যে রাখুন",
-             "৪K রেন্ডার করলে ভবিষ্যতে প্রিন্ট/বড় স্ক্রিনে কাজে লাগবে",
-             "ড্রোন-ভিউ সাইট কনটেক্সট দেখানোর জন্য সেরা"
-            ],
-            "mistakes": [
-             "অতিরিক্ত দীর্ঘ ভিডিও—দর্শক একঘেয়ে হয়",
-             "একই ক্যামেরা স্পিড রাখা",
-             "নারেশন বা টেক্সট না দেওয়া"
-            ],
-            "tips": [
-             "শুরুতে একটি হুক (সাইটের ড্রোন শট), শেষে call-to-action",
-             "সোশ্যাল মিডিয়া ভার্সন (৯:১৬) আলাদা বানিয়ে রাখুন",
-             "মিউজিক কপিরাইট-মুক্ত ব্যবহার করুন"
-            ]
-           },
-           {
-            "id": 18,
-            "en": "PowerPoint Presentation",
-            "bn": "পাওয়ারপয়েন্ট উপস্থাপনা",
-            "phase": "২. ডিজাইন ও পরিকল্পনা",
-            "duration": "২–৫ দিন",
-            "what": "প্রজেক্টের লক্ষ্য, ডিজাইন, সময়সূচি, বাজেট ও ঝুঁকি সংক্ষেপে উপস্থাপনের জন্য স্লাইড ডেক। ডায়াগ্রাম, রেন্ডার, গ্যান্ট চার্ট ও কস্ট ব্রেকডাউন থাকে।",
-            "uses": "ক্লায়েন্ট, ইনভেস্টর, ব্যাংক ও কর্তৃপক্ষকে এক বৈঠকেই পুরো প্রজেক্টের চিত্র দেওয়া এবং সিদ্ধান্ত ও অনুমোদন দ্রুত করা।",
-            "why": "মৌখিক ব্যাখ্যায় ভুল বোঝাবুঝি হয়; লিখিত ও ভিজ্যুয়াল স্লাইড সবাইকে একই তথ্য দেয় এবং পরে রেফারেন্স হিসেবে থাকে।",
-            "steps": [
-             "উপস্থাপনার উদ্দেশ্য ও অডিয়েন্স নির্ধারণ",
-             "প্রজেক্ট ওভারভিউ, লোকেশন ও ডিজাইন স্লাইড",
-             "সময়সূচি (গ্যান্ট) ও বাজেট স্লাইড",
-             "ঝুঁকি ও প্রশমন পরিকল্পনা",
-             "ক্লোজিং ও প্রশ্নোত্তর স্লাইড"
-            ],
-            "ways": [
-             "PowerPoint",
-             "PDF Deck",
-             "Keynote",
-             "Canva Presentation"
-            ],
-            "sources": [
-             "প্রজেক্ট ডকুমেন্টস (BOQ, শিডিউল, রিপোর্ট)"
-            ],
-            "examples": [
-             "১০ স্লাইডে LOCATION, DESIGN, COST, TIMELINE, RISK—৫টি সেকশন",
-             "মাসিক প্রগ্রেস মিটিংয়ে S-Curve ও ফটোসহ ৫ স্লাইড"
-            ],
-            "keyPoints": [
-             "প্রতি স্লাইডে ১টি মেসেজ—বেশি টেক্সট দেবেন না",
-             "শুরু ও শেষ স্লাইড সবচেয়ে গুরুত্বপূর্ণ",
-             "সংখ্যা ও ছবি—দুটোই ব্যবহার করুন"
-            ],
-            "mistakes": [
-             "অতিরিক্ত টেক্সটে ভরা স্লাইড",
-             "প্রশ্নোত্তরের জন্য প্রস্তুতি না থাকা",
-             "একই ডেকে সব অডিয়েন্স—সবার জন্য আলাদা ভার্সন লাগবে"
-            ],
-            "tips": [
-             "শেষে ১ পেজে Key Takeaways রাখুন",
-             "প্রিন্ট ও PDF—দুই ফরম্যাটে রাখুন",
-             "রিহার্সাল করুন—সময় ২০% কম লাগবে"
-            ]
-           },
-           {
-            "id": 19,
-            "en": "Project Director",
-            "bn": "প্রজেক্ট ডিরেক্টর",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "প্রজেক্টের পুরো সময়কাল",
-            "what": "প্রজেক্টের সর্বোচ্চ নির্বাহী, যিনি সময়, বাজেট, মান ও নিরাপত্তার চূড়ান্ত দায়িত্ব বহন করেন। তিনি প্রজেক্ট ম্যানেজার, কনসালট্যান্ট ও ক্লায়েন্টের মধ্যে সেতু এবং বড় সিদ্ধান্ত (বাজেট অনুমোদন, ঠিকাদার পরিবর্তন, ডিজাইন চেঞ্জ) নেন।",
-            "uses": "প্রজেক্টের কৌশলগত নেতৃত্ব, বড় বাধা সমাধান, স্টেকহোল্ডারদের মধ্যে সমন্বয় এবং প্রজেক্ট সময়মতো ও বাজেটের মধ্যে শেষ করা নিশ্চিত করা।",
-            "why": "স্পষ্ট নেতৃত্ব না থাকলে সিদ্ধান্ত দেরিতে হয়, দায় এড়ানো হয় এবং ছোট সমস্যা বড় সংকটে পরিণত হয়। একজন কার্যকর PD সফলতার সবচেয়ে বড় নির্ধারক।",
-            "steps": [
-             "Project Charter তৈরি করে লক্ষ্য, স্কোপ ও সাফল্যের মাপকাঠি",
-             "প্রজেক্ট ম্যানেজার ও মূল টিম নিয়োগ",
-             "বাজেট ও মাস্টার শিডিউল অনুমোদন",
-             "সাপ্তাহিক/মাসিক রিভিউ মিটিং",
-             "বড় সমস্যায় হস্তক্ষেপ ও সিদ্ধান্ত",
-             "ক্লোজআউট ও হস্তান্তর"
-            ],
-            "ways": [
-             "Single Project Director",
-             "Program Director (একাধিক প্রজেক্ট)",
-             "Executive Sponsor Model"
-            ],
-            "sources": [
-             "কোম্পানি Organogram",
-             "PMI PMBOK – Governance",
-             "Project Charter"
-            ],
-            "examples": [
-             "PD সাপ্তাহিক সাইট ভিজিট করে সরাসরি অগ্রগতি যাচাই",
-             "বিলম্বে PD-র অনুমোদনে অতিরিক্ত শ্রমিক ও ওভারটাইম রিকভারি প্ল্যান"
-            ],
-            "keyPoints": [
-             "PD = সিদ্ধান্ত গ্রহণকারী, PM = বাস্তবায়নকারী",
-             "প্রজেক্টের ৮০% বড় সমস্যা PD-র টেবিলে আসে",
-             "সফল PD-র ৪ গুণ: যোগাযোগ, সিদ্ধান্ত, নেতৃত্ব, দূরদর্শিতা"
-            ],
-            "mistakes": [
-             "মাইক্রোম্যানেজমেন্টে জড়িয়ে PM-এর কাজ কেড়ে নেওয়া",
-             "প্রজেক্ট শেষে হঠাৎ সাইটে আসা",
-             "ক্লায়েন্টের সাথে সরাসরি যোগাযোগ না রাখা"
-            ],
-            "tips": [
-             "প্রতি সপ্তাহে ১টি কৌশলগত সিদ্ধান্ত নিন",
-             "মাসিক স্টেকহোল্ডার মিটিং করুন",
-             "PD-র জন্য ড্যাশবোর্ড রাখুন—KPI এক নজরে"
-            ]
-           },
-           {
-            "id": 20,
-            "en": "Head Office Team",
-            "bn": "হেড অফিস টিম",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "প্রজেক্টের পুরো সময়কাল",
-            "what": "হেড অফিসের প্রকিউরমেন্ট, একাউন্টস, প্ল্যানিং, ডিজাইন ও QC বিভাগের সমন্বিত টিম, যারা সাইটের চাহিদা অনুযায়ী মাল কেনা, বিল পেমেন্ট, ডিজাইন সাপোর্ট ও মান যাচাই করে।",
-            "uses": "PR-কে PO-তে রূপান্তর, ঠিকাদারের বিল যাচাই ও পেমেন্ট, ডিজাইন রিভিশন ও QC রিপোর্ট পর্যালোচনা।",
-            "why": "সাইট ও অফিসের সমন্বয় না থাকলে মাল আসতে দেরি হয়, বিল আটকে থাকে, শ্রমিক বসে থাকে—প্রজেক্ট থমকে যায়।",
-            "steps": [
-             "সাইট থেকে PR, চালান ও রিপোর্ট গ্রহণ",
-             "প্রকিউরমেন্ট CS করে PO ইস্যু",
-             "একাউন্টস বিল যাচাই করে পেমেন্ট",
-             "প্ল্যানিং সাইটের অগ্রগতি মনিটর",
-             "QC টেস্ট রিপোর্ট রিভিউ ও ফিডব্যাক",
-             "সাপ্তাহিক হেড অফিস-সাইট সমন্বয় মিটিং"
-            ],
-            "ways": [
-             "Procurement Dept",
-             "Accounts Dept",
-             "Planning Dept",
-             "QC Dept",
-             "Design Cell"
-            ],
-            "sources": [
-             "কোম্পানি নীতিমালা",
-             "ERP/SAP সিস্টেম"
-            ],
-            "examples": [
-             "৫০০ ব্যাগ সিমেন্টের PR থেকে ৩ দিনে CS ও PO ইস্যু",
-             "ঠিকাদারের বিল ৭ দিনে একাউন্টস যাচাই করে পেমেন্ট"
-            ],
-            "keyPoints": [
-             "PR → CS → PO —এই ৩ ধাপেই কেনাকাটা হয়",
-             "প্রতি সপ্তাহে সাইট-অফিস সমন্বয় মিটিং বাধ্যতামূলক",
-             "ERP থাকলে ডেটা রিয়েল-টাইম পাওয়া যায়"
-            ],
-            "mistakes": [
-             "PR-এ স্পেসিফিকেশন না দেওয়া",
-             "একই আইটেমের জন্য বারবার ছোট PR",
-             "প্ল্যানিং ছাড়া হঠাৎ PO করা"
-            ],
-            "tips": [
-             "মাসিক Material Schedule আগেই বানিয়ে রাখুন",
-             "প্রতি ভেন্ডরের পারফরম্যান্স রেটিং রাখুন",
-             "সাইটের সাথে WhatsApp গ্রুপে দৈনিক আপডেট শেয়ার করুন"
-            ]
-           },
-           {
-            "id": 21,
-            "en": "Consultants",
-            "bn": "কনসালট্যান্ট",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "ডিজাইন পর্ব + সাপ্তাহিক সাইট ভিজিট",
-            "what": "স্বাধীন পেশাদার বা প্রতিষ্ঠান—আর্কিটেক্ট, স্ট্রাকচারাল ইঞ্জিনিয়ার, MEP কনসালট্যান্ট ও সুপারভিশন কনসালট্যান্ট—যারা ডিজাইন, যাচাই ও সাইট তদারকির বিশেষজ্ঞ সেবা দেয়। কাজ চুক্তিতে নির্দিষ্ট স্কোপ অনুযায়ী।",
-            "uses": "ডিজাইনের গুণমান ও কোড কমপ্লায়েন্স নিশ্চিত, সাইটে স্বাধীন তদারকি ও সার্টিফিকেশন এবং ক্লায়েন্টকে প্রযুক্তিগত পরামর্শ।",
-            "why": "ইন-হাউস টিমের সীমাবদ্ধতা থাকলে বা জটিল প্রজেক্টে বিশেষজ্ঞের প্রয়োজন। স্বাধীন কনসালট্যান্ট ভুল ধরতে পারে এবং আইনি সুরক্ষা দেয়।",
-            "steps": [
-             "প্রয়োজনীয় কনসালট্যান্সির স্কোপ নির্ধারণ",
-             "টেন্ডার/কোটেশনের মাধ্যমে নির্বাচন",
-             "চুক্তি সম্পাদন (ডেলিভারেবল, সময়, ফি)",
-             "ডিজাইন ডেলিভারি ও রিভিউ",
-             "সাইট সুপারভিশন ও ইন্সপেকশন",
-             "ফাইনাল কম্পলিশন সার্টিফিকেট"
-            ],
-            "ways": [
-             "Design Consultant",
-             "Supervision Consultant",
-             "Third-Party QA",
-             "Peer Review"
-            ],
-            "sources": [
-             "IEB (Institution of Engineers, Bangladesh)",
-             "IAB (Institute of Architects, Bangladesh)",
-             "প্রফেশনাল সার্ভিস চুক্তি"
-            ],
-            "examples": [
-             "স্ট্রাকচারাল কনসালট্যান্ট BBS যাচাই করে সই দিলেন, তারপর ঢালাই",
-             "MEP কনসালট্যান্ট সাইটে গিয়ে ডাক্ট-পাইপের ক্ল্যাশ চেক করলেন"
-            ],
-            "keyPoints": [
-             "সব কনসালট্যান্টের ফি সাধারণত প্রজেক্ট কস্টের ৩–৮%",
-             "চুক্তিতে সাইট ভিজিটের সংখ্যা স্পষ্ট করুন",
-             "স্বাধীন কনসালট্যান্ট QC-এর ভূমিকা রাখতে পারেন"
-            ],
-            "mistakes": [
-             "শুধু ডিজাইন নিয়ে চুক্তি—সুপারভিশন বাদ দেওয়া",
-             "সাইট ভিজিটের সংখ্যা স্পষ্ট না রাখা",
-             "একই কনসালট্যান্টকে ডিজাইন ও সুপারভিশন দেওয়া (স্বাধীনতা হারায়)"
-            ],
-            "tips": [
-             "মাসিক রিপোর্ট দেওয়ার শর্ত চুক্তিতে রাখুন",
-             "প্রতি ২ সপ্তাহে সাইট ভিজিট রাখুন",
-             "কনসালট্যান্টের পরামর্শ লিখিতভাবে নিন"
-            ]
-           },
-           {
-            "id": 22,
-            "en": "In-house Team",
-            "bn": "ইন-হাউস টিম",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "প্রজেক্টের পুরো সময়কাল",
-            "what": "কোম্পানির নিজস্ব স্থায়ী ইঞ্জিনিয়ার, ড্রাফটসম্যান ও QC কর্মীদের টিম, যারা বাইরের কনসালট্যান্টের ওপর কম নির্ভর করে ডিজাইন, প্ল্যানিং ও সাইট পরিচালনা করে। কোম্পানির স্ট্যান্ডার্ড ও প্রক্রিয়া অনুসরণ করে।",
-            "uses": "দ্রুত সিদ্ধান্ত, খরচ নিয়ন্ত্রণ, কোম্পানির জ্ঞান ও অভিজ্ঞতা ধরে রাখা।",
-            "why": "প্রতিবার বাইরের কনসালট্যান্ট নিলে খরচ ও সময় বেশি লাগে; ইন-হাউস টিম কোম্পানির স্ট্যান্ডার্ড মেনে দ্রুত কাজ করতে পারে।",
-            "steps": [
-             "প্রতিটি পদের যোগ্যতা ও দায়িত্ব নির্ধারণ",
-             "সফটওয়্যার ও ডিজাইন স্ট্যান্ডার্ড ঠিক",
-             "সাইট ও অফিসের মধ্যে দৈনিক সমন্বয়",
-             "নিয়মিত ট্রেনিং ও স্কিল ডেভেলপমেন্ট",
-             "কর্মক্ষমতা মূল্যায়ন ও উন্নতি"
-            ],
-            "ways": [
-             "In-house Design Cell",
-             "In-house QC Team",
-             "In-house Planning Cell"
-            ],
-            "sources": [
-             "কোম্পানি HR Policy",
-             "Organogram"
-            ],
-            "examples": [
-             "নিজস্ব স্ট্রাকচারাল টিম ফিনিশ ডিটেইল আঁকে—বাইরে পাঠাতে হয় না",
-             "নিজস্ব QC ল্যাব ক্যুব টেস্ট করে—ফলাফল দ্রুত"
-            ],
-            "keyPoints": [
-             "ইন-হাউস টিম = কম খরচ, বেশি নিয়ন্ত্রণ",
-             "সিনিয়র ইঞ্জিনিয়ার ১ জন + জুনিয়র ২–৩ জনেই ছোট প্রজেক্ট চালানো যায়",
-             "নিয়মিত ট্রেনিং বাধ্যতামূলক"
-            ],
-            "mistakes": [
-             "একজনকে একাধিক দায়িত্বে চাপ দেওয়া",
-             "সফটওয়্যার লাইসেন্স না রাখা",
-             "ট্রেনিং না দেওয়া"
-            ],
-            "tips": [
-             "প্রতি ইঞ্জিনিয়ারের জন্য একটি আলাদা প্রজেক্ট দিন",
-             "৩ মাসে একবার স্কিল অ্যাসেসমেন্ট",
-             "ভালো পারফরম্যান্সে ইনসেনটিভ রাখুন"
-            ]
-           },
-           {
-            "id": 23,
-            "en": "Project Team",
-            "bn": "প্রজেক্ট টিম",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "প্রজেক্টের পুরো সময়কাল",
-            "what": "সাইটে নিয়োজিত প্রকৌশলী, সুপারভাইজার, ফোরম্যান, স্টোর কিপার ও সার্ভেয়ারদের সমন্বয়ে গঠিত দল। এরা ড্রয়িংকে বাস্তবে রূপ দেয়, প্রতিদিনের কাজ তদারকি করে এবং মান ও অগ্রগতি নিশ্চিত করে।",
-            "uses": "দৈনিক কাজের পরিকল্পনা ও বাস্তবায়ন, শ্রমিক ও মালামাল ব্যবস্থাপনা এবং সাইটের নিরাপত্তা ও QC নিশ্চিত।",
-            "why": "স্পষ্ট দায়িত্ব বিভাজন না থাকলে কাজ বাদ পড়ে, দুইবার হয় বা ভুল হয়; সুসংগঠিত টিমই প্রজেক্টের মান ও গতি ধরে রাখে।",
-            "steps": [
-             "প্রতিটি পদের Job Description তৈরি",
-             "দৈনিক সকালের ব্রিফিং ও কাজের বণ্টন",
-             "সুপারভাইজার কাজের তদারকি ও মাপ",
-             "ইঞ্জিনিয়ার প্রযুক্তিগত সিদ্ধান্ত ও QC",
-             "স্টোর কিপার মাল রিসিভ ও ইস্যু",
-             "দিনশেষে DPR তৈরি"
-            ],
-            "ways": [
-             "Site Engineer",
-             "Supervisor/Foreman",
-             "Store Keeper",
-             "Surveyor",
-             "Safety Officer"
-            ],
-            "sources": [
-             "Organogram",
-             "Job Description Document"
-            ],
-            "examples": [
-             "সুপারভাইজার রড বাঁধা চেক করে ইঞ্জিনিয়ারকে রিপোর্ট দিলেন",
-             "স্টোর কিপার চালান ও PO মিলিয়ে মাল রিসিভ করলেন"
-            ],
-            "keyPoints": [
-             "১ জন ইঞ্জিনিয়ারের অধীনে সর্বোচ্চ ৩–৫ জন সুপারভাইজার",
-             "প্রতি ২০–৩০ জন শ্রমিকে ১ জন সুপারভাইজার",
-             "নিরাপত্তার জন্য ১ জন Safety Officer রাখুন"
-            ],
-            "mistakes": [
-             "একই ব্যক্তি মাল রিসিভ ও ব্যবহার দুইটাই দেখে",
-             "সুপারভাইজারকে ইঞ্জিনিয়ারের দায়িত্ব দেওয়া",
-             "DPR না রাখা"
-            ],
-            "tips": [
-             "প্রতিদিন সকাল ৮টায় ১০ মিনিট ব্রিফিং",
-             "প্রতি সপ্তাহে টিম মিটিং ও প্ল্যান শেয়ার",
-             "ভালো পারফরম্যান্সে মাসিক ইনসেনটিভ"
-            ]
-           },
-           {
-            "id": 24,
-            "en": "Organogram",
-            "bn": "অর্গানোগ্রাম",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "১–২ দিন",
-            "what": "কোম্পানি বা প্রজেক্টের সাংগঠনিক কাঠামো চার্ট, যা দেখায় কে কার অধীনে কাজ করে, প্রতিটি পদের দায়িত্ব ও রিপোর্টিং লাইন কীভাবে চলে। নাম, পদ ও যোগাযোগ তথ্য থাকতে পারে।",
-            "uses": "দায়িত্ব ও ক্ষমতার স্পষ্টতা, নতুন কর্মীকে দ্রুত বোঝানো এবং সমস্যায় সঠিক ব্যক্তির কাছে যাওয়া।",
-            "why": "অস্পষ্ট অর্গানোগ্রামে দ্বন্দ্ব, দায় এড়ানো ও সিদ্ধান্তে বিলম্ব হয়। স্পষ্ট চার্ট পুরো টিমকে একই দিকে পরিচালিত করে।",
-            "steps": [
-             "সব পদ ও দায়িত্বের তালিকা",
-             "রিপোর্টিং লাইন আঁকা",
-             "প্রজেক্ট ডিরেক্টরকে শীর্ষে বসানো",
-             "নাম ও যোগাযোগসহ প্রকাশ",
-             "পরিবর্তনে আপডেট ও পুনঃপ্রকাশ"
-            ],
-            "ways": [
-             "Hierarchical",
-             "Matrix",
-             "Flat Structure"
-            ],
-            "sources": [
-             "HR Department",
-             "Project Management Plan"
-            ],
-            "examples": [
-             "PD → PM → Site Engineer → Supervisor → Foreman",
-             "সিভিল, MEP ও QC—তিনটি আলাদা শাখা PM-এর অধীনে"
-            ],
-            "keyPoints": [
-             "একজন কর্মীর একাধিক বস থাকলে Matrix",
-             "প্রজেক্টে সাধারণত ৫–৭ স্তরই যথেষ্ট",
-             "প্রতিটি বক্সে নাম, পদ, ফোন নম্বর"
-            ],
-            "mistakes": [
-             "একই পদে দুইজন—দ্বন্দ্ব হবে",
-             "রিপোর্টিং লাইন উল্টো",
-             "সময়মতো আপডেট না করা"
-            ],
-            "tips": [
-             "অর্গানোগ্রাম সাইট অফিসে দেয়ালে টাঙান",
-             "প্রতিটি পদের পাশে প্রধান দায়িত্ব ১ লাইনে লিখুন",
-             "ডিজিটাল ভার্সন (PDF) সবার সাথে শেয়ার করুন"
-            ]
-           },
-           {
-            "id": 25,
-            "en": "Staff List",
-            "bn": "স্টাফ তালিকা",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "প্রতিদিন আপডেট",
-            "what": "সাইটে কর্মরত সব স্থায়ী, ঠিকাদারি ও দৈনিক শ্রমিকের নাম, পদ, আইডি ও ফোন নম্বরসহ তালিকা। প্রতিদিন হাজিরা ও সংখ্যা আপডেট করা হয়, যাতে জরুরি অবস্থায় সঠিক তথ্য পাওয়া যায়।",
-            "uses": "হাজিরা ও বেতন হিসাব, নিরাপত্তা (কে সাইটে আছে জানা), জরুরি যোগাযোগ এবং অডিটের জন্য রেকর্ড।",
-            "why": "জরুরি অবস্থায় (অগ্নিকাণ্ড, দুর্ঘটনা) কে কোথায় আছে জানা অপরিহার্য; স্টাফ তালিকা ছাড়া উদ্ধার ও যোগাযোগ কঠিন।",
-            "steps": [
-             "স্থায়ী, ঠিকাদারি ও দৈনিক—তিন ক্যাটাগরিতে ভাগ",
-             "নাম, পদ, আইডি ও ফোন নম্বর এন্ট্রি",
-             "প্রতিদিন হাজিরা আপডেট",
-             "গেটে সিকিউরিটির জন্য কপি",
-             "মাসিক বেতন ও বিল প্রসেসিংয়ে ব্যবহার"
-            ],
-            "ways": [
-             "Permanent Staff",
-             "Contractor Staff",
-             "Daily Labor",
-             "Digital Attendance (বায়োমেট্রিক/অ্যাপ)"
-            ],
-            "sources": [
-             "হাজিরা রেজিস্টার",
-             "HR Records"
-            ],
-            "examples": [
-             "স্থায়ী ১৫ জন, ঠিকাদারি ১২০ জন, দৈনিক ৩০ জন—মোট ১৬৫ জনের তালিকা",
-             "গেটে প্রতিদিন সকালে স্টাফ তালিকা মিলিয়ে দেখা"
-            ],
-            "keyPoints": [
-             "প্রতিটি শ্রমিকের নাম, ফোন, রক্তের গ্রুপ রাখুন",
-             "দৈনিক শ্রমিকের সংখ্যা সকালে ও বিকেলে মেলান",
-             "সাপ্তাহিক বেতন শিট মিলিয়ে দেখুন"
-            ],
-            "mistakes": [
-             "একই নাম দুইবার এন্ট্রি",
-             "ঠিকাদারি শ্রমিককে বাদ দেওয়া",
-             "ফোন নম্বর আপডেট না রাখা"
-            ],
-            "tips": [
-             "বায়োমেট্রিক হাজিরা ব্যবহার করুন",
-             "প্রতিটি সাব-কন্ট্রাক্টরের আলাদা লিস্ট রাখুন",
-             "সাইটের সবাইকে আইডি কার্ড দিন—নিরাপত্তা ও শৃঙ্খলা বাড়বে"
-            ]
-           },
-           {
-            "id": 26,
-            "en": "Project Management",
-            "bn": "প্রজেক্ট ম্যানেজমেন্ট",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "প্রজেক্টের পুরো সময়কাল",
-            "what": "প্রজেক্টের পরিকল্পনা, সংগঠন, নেতৃত্ব ও নিয়ন্ত্রণ—এই চারটি ফাংশনের সমন্বিত প্রয়োগ। স্কোপ, সময়, খরচ, মান, ঝুঁকি ও যোগাযোগ—সব ব্যবস্থাপনা এর আওতায়।",
-            "uses": "প্রজেক্ট সময়মতো, বাজেটের মধ্যে ও নির্ধারিত মানে শেষ করা এবং স্টেকহোল্ডারদের প্রত্যাশা পূরণ।",
-            "why": "ভালো ব্যবস্থাপনা ছাড়া প্রজেক্ট দেরিতে, বাড়তি খরচে ও নিম্নমানের হয়; সম্পদ ও সময়ের অপচয় হয়।",
-            "steps": [
-             "স্কোপ ও লক্ষ্য নির্ধারণ (Project Charter)",
-             "WBS (Work Breakdown Structure) তৈরি",
-             "শিডিউল ও বাজেট তৈরি",
-             "ঝুঁকি চিহ্নিত করে প্রশমন পরিকল্পনা",
-             "দৈনিক/সাপ্তাহিক মনিটরিং ও কন্ট্রোল",
-             "ক্লোজআউট ও লেসন লার্নড"
-            ],
-            "ways": [
-             "PMBOK (Predictive)",
-             "Agile (ডিজাইনে)",
-             "Lean Construction",
-             "Critical Chain PM"
-            ],
-            "sources": [
-             "PMI PMBOK Guide",
-             "কোম্পানি PMO",
-             "ISO 21500"
-            ],
-            "examples": [
-             "সাইট ইনচার্জ ঢালাইয়ের আগে চেকলিস্টে সই—এটি কন্ট্রোল প্রসেস",
-             "সাপ্তাহিক বাজেট ভ্যারিয়েন্স রিভিউ করে খরচ নিয়ন্ত্রণ"
-            ],
-            "keyPoints": [
-             "Triple Constraint: Scope, Time, Cost",
-             "WBS ৩–৫ স্তরে ভাঙুন",
-             "প্রতি সপ্তাহে ১টি কন্ট্রোল মিটিং বাধ্যতামূলক"
-            ],
-            "mistakes": [
-             "স্কোপ ঠিক না করে কাজ শুরু",
-             "ঝুঁকি তালিকা না রাখা",
-             "শুধু অগ্রগতি দেখা—খরচ না দেখা"
-            ],
-            "tips": [
-             "Earned Value Management ব্যবহার করুন",
-             "Risk Register নিয়মিত আপডেট করুন",
-             "প্রতি মাসে ক্লায়েন্টের সাথে প্রগ্রেস মিটিং"
-            ]
-           },
-           {
-            "id": 27,
-            "en": "Coordination",
-            "bn": "সমন্বয়",
-            "phase": "৩. টিম ও ব্যবস্থাপনা",
-            "duration": "প্রতিদিন চলমান",
-            "what": "আর্কিটেক্ট, স্ট্রাকচারাল, MEP, ঠিকাদার ও ভেন্ডরদের মধ্যে তথ্য, সময়সূচি ও কাজের ধারাবাহিকতা মিলিয়ে কাজ করানো। ড্রয়িং ওভারলে, ক্ল্যাশ ডিটেকশন, সাইট মিটিং ও সমন্বয় মিনিট অন্তর্ভুক্ত।",
-            "uses": "একে অন্যের কাজের সংঘাত এড়ানো, পুনরায় কাজ (Rework) কমানো এবং সবার কাজ সঠিক সময়ে ও সঠিক জায়গায় সম্পন্ন।",
-            "why": "ঢালাইয়ের আগে MEP স্লিভ না বসালে পরে স্ল্যাব ভাঙতে হয়; লিফট শ্যাফটের মাপ না মিললে লিফট বসে না। সমন্বয় ছাড়া এসব ভুল অনিবার্য।",
-            "steps": [
-             "সাপ্তাহিক সমন্বয় মিটিং",
-             "সব ড্রয়িং একসাথে ওভারলে চেক",
-             "ক্ল্যাশ/কনফ্লিক্টের তালিকা তৈরি",
-             "সমাধান ও দায়িত্ব বণ্টন",
-             "মিনিট লিখে সবাইকে পাঠানো",
-             "পরবর্তী মিটিংয়ে ফলো-আপ"
-            ],
-            "ways": [
-             "Weekly Coordination Meeting",
-             "BIM Clash Detection",
-             "Daily Site Huddle",
-             "WhatsApp/Email Trail"
-            ],
-            "sources": [
-             "মিটিং মিনিটস",
-             "BIM Model (Revit/Navisworks)"
-            ],
-            "examples": [
-             "ঢালাইয়ের আগে MEP ইঞ্জিনিয়ার স্লিভ পজিশন চেক করে সই",
-             "লিফট শ্যাফটের মাপ আর্কিটেক্ট ও স্ট্রাকচারাল ড্রয়িংয়ে মিলিয়ে নেওয়া"
-            ],
-            "keyPoints": [
-             "সমন্বয় মিটিং সপ্তাহে ১ বার—৩০ মিনিট যথেষ্ট",
-             "প্রতিটি ক্ল্যাশের জন্য দায়ী ব্যক্তি ও ডেডলাইন ঠিক করুন",
-             "WhatsApp গ্রুপে সিদ্ধান্ত—পরে প্রমাণ হিসেবে রাখুন"
-            ],
-            "mistakes": [
-             "শুধু মৌখিক সিদ্ধান্ত—লিখিত প্রমাণ নেই",
-             "সব ট্রেডকে একসাথে না ডাকা",
-             "সমস্যা সমাধান না করে মিটিং শেষ করা"
-            ],
-            "tips": [
-             "BIM মডেলে ক্ল্যাশ ডিটেকশন করুন—কাগজে ধরা পড়ে না",
-             "প্রতি ট্রেডের জন্য ১ জন দায়িত্বপ্রাপ্ত ব্যক্তি",
-             "মিটিং মিনিট ২৪ ঘণ্টার মধ্যে পাঠান"
-            ]
-           },
-           {
-            "id": 28,
-            "en": "Electrical Connection & Meter",
-            "bn": "বৈদ্যুতিক সংযোগ ও মিটার",
-            "phase": "৪. ইউটিলিটি সংযোগ",
-            "duration": "৪–১২ সপ্তাহ",
-            "what": "DPDC/DESCO/REB থেকে বৈদ্যুতিক সংযোগ নেওয়ার প্রক্রিয়া: লোড অনুমোদন, ডিস্ট্রিবিউশন লাইন টানা, ট্রান্সফরমার (প্রয়োজনে) স্থাপন এবং মিটার বসানো। মিটার বসানোর আগে ইন্টারনাল ওয়্যারিং ও আর্থিং চেক হয়।",
-            "uses": "নির্মাণকালে অস্থায়ী বিদ্যুৎ এবং ভবন শেষে স্থায়ী বিদ্যুৎ সংযোগ।",
-            "why": "অবৈধ সংযোগে দুর্ঘটনা ও জরিমানা; সঠিক লোড অনুমোদন ছাড়া ট্রান্সফরমার ও ক্যাবল সাইজ ঠিক করা যায় না।",
-            "steps": [
-             "প্রয়োজনীয় লোড (kW/kVA) হিসাব",
-             "অনলাইন/অফিসে আবেদন ও ফি জমা",
-             "বিদ্যুৎ কর্তৃপক্ষের সাইট ইন্সপেকশন",
-             "লাইন টানা/ট্রান্সফরমার স্থাপন",
-             "মিটার বসানো (CMO ইস্যু) ও কমিশনিং"
-            ],
-            "ways": [
-             "অস্থায়ী সংযোগ (নির্মাণকালীন)",
-             "স্থায়ী আবাসিক/কমার্শিয়াল",
-             "জেনারেটর ব্যাকআপ",
-             "সোলার হাইব্রিড"
-            ],
-            "sources": [
-             "DPDC/DESCO/REB নিয়ম",
-             "BNBC 2020, Part 8"
-            ],
-            "examples": [
-             "নির্মাণকালে ১০০ kVA অস্থায়ী সংযোগ—ক্রেন ও পাম্প চালানো",
-             "ভবন শেষে ৫০০ kVA সাবস্টেশন + মিটার"
-            ],
-            "keyPoints": [
-             "সংযোগ পেতে ২–৩ মাস লাগতে পারে—আগে আবেদন করুন",
-             "ট্রান্সফরমার সাইজ = মোট লোড × ১.২৫",
-             "আর্থিং রেজিস্ট্যান্স ১ ohm এর নিচে রাখুন"
-            ],
-            "mistakes": [
-             "লোড হিসাব না করে আবেদন",
-             "আর্থিং টেস্ট না করা",
-             "জেনারেটর ও মেইন লাইনের ইন্টারলক না রাখা"
-            ],
-            "tips": [
-             "প্রি-পেইড মিটার নিলে বিল নিয়ন্ত্রণে থাকবে",
-             "সোলার প্যানেলের জন্য জায়গা রাখুন",
-             "Changeover Switch ছাড়া জেনারেটর চালাবেন না"
-            ]
-           },
-           {
-            "id": 29,
-            "en": "Water Supply (WASA & Deep Tube-wells)",
-            "bn": "পানি সরবরাহ (ওয়াসা ও গভীর নলকূপ)",
-            "phase": "৪. ইউটিলিটি সংযোগ",
-            "duration": "৪–৮ সপ্তাহ",
-            "what": "ওয়াসা লাইন সংযোগ বা গভীর নলকূপ স্থাপন করে পানির উৎস তৈরি। পাম্প, ওভারহেড ট্যাংক, আন্ডারগ্রাউন্ড রিজার্ভার ও পানির মান পরীক্ষা (আয়রন, আর্সেনিক, TDS) অন্তর্ভুক্ত।",
-            "uses": "নির্মাণকালে কংক্রিট মিক্সিং ও কিউরিং এবং ভবন শেষে বাসিন্দাদের জন্য নিরাপদ পানি সরবরাহ।",
-            "why": "পানি ছাড়া কংক্রিটের কাজ ও কিউরিং বন্ধ হয়ে যায়; দূষিত পানি ব্যবহারে কাঠামোর ক্ষতি ও স্বাস্থ্যঝুঁকি।",
-            "steps": [
-             "দৈনিক পানির চাহিদা হিসাব (নির্মাণ + ব্যবহার)",
-             "ওয়াসা আবেদন বা ড্রিলিং ঠিকাদার নির্বাচন",
-             "বোরিং, কেসিং ও পাম্প বসানো",
-             "পানির নমুনা ল্যাবে পরীক্ষা",
-             "ট্যাংক ও পাইপলাইন সংযোগ",
-             "প্রয়োজনে ফিল্টার/আয়রন রিমুভাল"
-            ],
-            "ways": [
-             "ওয়াসা সংযোগ",
-             "গভীর নলকূপ",
-             "ওয়াটার ট্যাংকার (অস্থায়ী)",
-             "বৃষ্টির পানি সংগ্রহ"
-            ],
-            "sources": [
-             "WASA (ঢাকা/চট্টগ্রাম)",
-             "DPHE নির্দেশিকা",
-             "WHO Drinking Water Guidelines"
-            ],
-            "examples": [
-             "নির্মাণকালে ২টি অস্থায়ী নলকূপ + ১টি ট্যাংকার",
-             "স্থায়ী ২০০ ফুট গভীর নলকূপ + ১০,০০০ লিটার
+          ##### APNAR ORIGINAL topics.json (63 topic) ETA THEKE SHURU HOBE: ei line muchhe ekhane paste korun, 10 space indent soho #####
+          EOF_JSON
+      - name: Check JSON
+        run: |
+          python3 -c "import json;print('topics:',len(json.load(open('Sources/topics.json'))))"
+          python3 -c "import json;print('extras:',len(json.load(open('Sources/extras.json'))))"
+      - name: Build
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -project SiteBook.xcodeproj -scheme SiteBook -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          mkdir Payload
+          cp -r build/Build/Products/Release-iphoneos/SiteBook.app Payload/
+          zip -r SiteBook.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SiteBook-ipa
+          path: SiteBook.ipa
