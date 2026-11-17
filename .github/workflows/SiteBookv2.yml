@@ -1,0 +1,1175 @@
+name: Build Unsigned IPA
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/build.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          brew install xcodegen 2>/dev/null || brew upgrade xcodegen
+          xcodegen --version
+
+      - name: Write source files
+        run: |
+          set -euo pipefail
+          mkdir -p Sources/Resources
+
+          cat > project.yml <<'EOF_PROJ'
+          name: SiteBook
+          options:
+            bundleIdPrefix: com.sitebook
+            deploymentTarget:
+              iOS: "16.0"
+            createIntermediateGroups: true
+          settings:
+            base:
+              SWIFT_VERSION: "5.9"
+          targets:
+            SiteBook:
+              type: application
+              platform: iOS
+              deploymentTarget: "16.0"
+              sources:
+                - path: Sources
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.sitebook.app
+                  GENERATE_INFOPLIST_FILE: YES
+                  INFOPLIST_KEY_UILaunchScreen_Generation: YES
+                  INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+                  INFOPLIST_KEY_CFBundleDisplayName: SiteBook
+                  MARKETING_VERSION: "1.0"
+                  CURRENT_PROJECT_VERSION: "1"
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  CODE_SIGN_STYLE: Manual
+                  CODE_SIGNING_REQUIRED: NO
+                  CODE_SIGNING_ALLOWED: NO
+          schemes:
+            SiteBook:
+              build:
+                targets:
+                  SiteBook: all
+              run:
+                config: Release
+              archive:
+                config: Release
+          EOF_PROJ
+
+          cat > Sources/Models.swift <<'EOF_MODELS'
+          import Foundation
+
+          struct Topic: Codable, Identifiable, Hashable {
+              var id: Int
+              var en: String
+              var bn: String
+              var phase: String?
+              var what: String?
+              var why: String?
+              var uses: String?
+              var steps: [String]?
+              var ways: [String]?
+              var sources: [String]?
+              var examples: [String]?
+              var mistakes: [String]?
+              var checklist: [String]?
+              var tips: [String]?
+              var risks: [String]?
+
+              var haystack: String {
+                  let all = [en, bn, what ?? "", why ?? "", uses ?? ""]
+                      + (steps ?? []) + (ways ?? []) + (sources ?? [])
+                      + (examples ?? []) + (mistakes ?? []) + (tips ?? [])
+                      + (risks ?? []) + (checklist ?? [])
+                  return all.joined(separator: " ").lowercased()
+              }
+          }
+          EOF_MODELS
+
+          cat > Sources/Theme.swift <<'EOF_THEME'
+          import SwiftUI
+
+          enum Theme {
+              static let bg            = dyn(light: 0xF7F7F8, dark: 0x0E0E10)
+              static let surface       = dyn(light: 0xFFFFFF, dark: 0x1A1A1D)
+              static let textPrimary   = dyn(light: 0x111114, dark: 0xF2F2F5)
+              static let textSecondary = dyn(light: 0x6B6B72, dark: 0x9A9AA3)
+              static let divider       = dyn(light: 0xE4E4E9, dark: 0x2A2A2F)
+              static let accent        = dyn(light: 0x0F6E6B, dark: 0x3FA39F)
+              static let risk          = dyn(light: 0xB42318, dark: 0xF97066)
+              static let warn          = dyn(light: 0xB54708, dark: 0xFDB022)
+              static let success       = dyn(light: 0x067647, dark: 0x47CD89)
+
+              static func dyn(light: UInt32, dark: UInt32) -> Color {
+                  Color(uiColor: UIColor { traits in
+                      UIColor(rgb: traits.userInterfaceStyle == .dark ? dark : light)
+                  })
+              }
+          }
+
+          extension UIColor {
+              convenience init(rgb: UInt32) {
+                  self.init(
+                      red: CGFloat((rgb >> 16) & 0xFF) / 255,
+                      green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                      blue: CGFloat(rgb & 0xFF) / 255,
+                      alpha: 1
+                  )
+              }
+          }
+          EOF_THEME
+
+          cat > Sources/Store.swift <<'EOF_STORE'
+          import Foundation
+
+          final class Store: ObservableObject {
+              @Published private(set) var topics: [Topic] = []
+              @Published private(set) var loadError: String?
+
+              @Published var favs: Set<Int> = [] { didSet { save() } }
+              @Published var done: Set<Int> = [] { didSet { save() } }
+              @Published var checked: [String: Set<Int>] = [:] { didSet { save() } }
+              @Published var notes: [String: String] = [:]
+              @Published var lastReadId: Int? { didSet { UserDefaults.standard.set(lastReadId, forKey: "lastReadId") } }
+
+              private var notesSaveWork: DispatchWorkItem?
+
+              init() {
+                  load()
+                  restore()
+              }
+
+              // MARK: - Load
+              private func load() {
+                  guard let url = Bundle.main.url(forResource: "topics", withExtension: "json") else {
+                      loadError = "topics.json not found in bundle. Ensure Sources/Resources/topics.json is present."
+                      topics = []
+                      return
+                  }
+                  do {
+                      let data = try Data(contentsOf: url)
+                      topics = try JSONDecoder().decode([Topic].self, from: data)
+                          .sorted { $0.id < $1.id }
+                  } catch {
+                      loadError = "Failed to decode topics.json: \(error.localizedDescription)"
+                      topics = []
+                  }
+              }
+
+              func reload() { load() }
+
+              // MARK: - Persistence
+              private func restore() {
+                  let u = UserDefaults.standard
+                  favs = Set(u.array(forKey: "favs") as? [Int] ?? [])
+                  done = Set(u.array(forKey: "done") as? [Int] ?? [])
+                  notes = u.dictionary(forKey: "notes") as? [String: String] ?? [:]
+                  if let raw = u.dictionary(forKey: "checked") as? [String: [Int]] {
+                      checked = raw.mapValues { Set($0) }
+                  }
+                  if let id = u.object(forKey: "lastReadId") as? Int { lastReadId = id }
+              }
+
+              private func save() {
+                  let u = UserDefaults.standard
+                  u.set(Array(favs), forKey: "favs")
+                  u.set(Array(done), forKey: "done")
+                  u.set(checked.mapValues { Array($0) }, forKey: "checked")
+              }
+
+              // MARK: - Notes (debounced)
+              func setNote(topicId: Int, text: String) {
+                  notes["\(topicId)"] = text
+                  notesSaveWork?.cancel()
+                  let snapshot = notes
+                  let work = DispatchWorkItem {
+                      UserDefaults.standard.set(snapshot, forKey: "notes")
+                  }
+                  notesSaveWork = work
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+              }
+
+              func flushNotes() {
+                  notesSaveWork?.cancel()
+                  UserDefaults.standard.set(notes, forKey: "notes")
+              }
+
+              // MARK: - Actions
+              func toggleFav(_ id: Int) {
+                  if favs.contains(id) { favs.remove(id) } else { favs.insert(id) }
+              }
+
+              func toggleDone(_ id: Int) {
+                  if done.contains(id) { done.remove(id) } else { done.insert(id) }
+              }
+
+              func toggleChecked(topicId: Int, itemIndex: Int) {
+                  let key = "\(topicId)"
+                  var set = checked[key] ?? []
+                  if set.contains(itemIndex) { set.remove(itemIndex) } else { set.insert(itemIndex) }
+                  checked[key] = set
+              }
+
+              func isChecked(topicId: Int, itemIndex: Int) -> Bool {
+                  checked["\(topicId)"]?.contains(itemIndex) ?? false
+              }
+
+              // MARK: - Derived
+              var phases: [String] {
+                  var seen = Set<String>()
+                  return topics.compactMap { $0.phase }.filter { seen.insert($0).inserted }
+              }
+
+              var topicsWithMistakes: Int { topics.filter { !($0.mistakes?.isEmpty ?? true) }.count }
+              var topicsWithRisks: Int { topics.filter { !($0.risks?.isEmpty ?? true) }.count }
+
+              func topics(forPhase phase: String) -> [Topic] { topics.filter { $0.phase == phase } }
+              func doneCount(inPhase phase: String) -> Int {
+                  topics(forPhase: phase).filter { done.contains($0.id) }.count
+              }
+
+              var continueTopic: Topic? {
+                  if let id = lastReadId, let t = topics.first(where: { $0.id == id }) { return t }
+                  return topics.first(where: { !done.contains($0.id) }) ?? topics.first
+              }
+
+              var notesSorted: [(topicId: Int, topic: Topic, text: String)] {
+                  notes.compactMap { key, text -> (Int, Topic, String)? in
+                      guard let id = Int(key),
+                            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            let t = topics.first(where: { $0.id == id }) else { return nil }
+                      return (id, t, text)
+                  }.sorted { $0.0 < $1.0 }
+              }
+          }
+          EOF_STORE
+
+          cat > Sources/Components.swift <<'EOF_COMPONENTS'
+          import SwiftUI
+
+          struct SectionHeader: View {
+              let text: String
+              var body: some View {
+                  Text(text)
+                      .font(.caption.weight(.semibold))
+                      .tracking(0.4)
+                      .textCase(.uppercase)
+                      .foregroundStyle(Theme.textSecondary)
+                      .padding(.bottom, 12)
+              }
+          }
+
+          struct BodyText: View {
+              let text: String
+              var body: some View {
+                  Text(text)
+                      .font(.body)
+                      .lineSpacing(5)
+                      .foregroundStyle(Theme.textPrimary)
+                      .textSelection(.enabled)
+                      .frame(maxWidth: .infinity, alignment: .leading)
+              }
+          }
+
+          struct BulletItem: View {
+              let text: String
+              var dotColor: Color = Theme.accent
+              var body: some View {
+                  HStack(alignment: .firstTextBaseline, spacing: 12) {
+                      Circle().fill(dotColor).frame(width: 6, height: 6).offset(y: -3)
+                      Text(text)
+                          .font(.body).lineSpacing(4)
+                          .foregroundStyle(Theme.textPrimary)
+                          .frame(maxWidth: .infinity, alignment: .leading)
+                          .textSelection(.enabled)
+                  }
+              }
+          }
+
+          struct NumberedItem: View {
+              let number: Int
+              let text: String
+              var body: some View {
+                  HStack(alignment: .firstTextBaseline, spacing: 12) {
+                      Text("\(number)")
+                          .font(.system(.subheadline, design: .monospaced).weight(.medium))
+                          .foregroundStyle(Theme.textSecondary)
+                          .frame(minWidth: 20, alignment: .trailing)
+                      Text(text)
+                          .font(.body).lineSpacing(4)
+                          .foregroundStyle(Theme.textPrimary)
+                          .frame(maxWidth: .infinity, alignment: .leading)
+                          .textSelection(.enabled)
+                  }
+              }
+          }
+
+          struct CalloutSection: View {
+              let title: String
+              let icon: String
+              let color: Color
+              let items: [String]
+              var body: some View {
+                  VStack(alignment: .leading, spacing: 0) {
+                      HStack(spacing: 6) {
+                          Image(systemName: icon).foregroundStyle(color)
+                          Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
+                      }
+                      .padding(.bottom, 12)
+                      VStack(alignment: .leading, spacing: 10) {
+                          ForEach(items.indices, id: \.self) { i in
+                              BulletItem(text: items[i], dotColor: color)
+                          }
+                      }
+                  }
+                  .padding(.leading, 14)
+                  .overlay(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
+              }
+          }
+
+          struct Hairline: View {
+              var body: some View {
+                  Rectangle().fill(Theme.divider).frame(height: 1)
+              }
+          }
+
+          struct StatBlock: View {
+              let value: String
+              let label: String
+              var body: some View {
+                  VStack(alignment: .leading, spacing: 2) {
+                      Text(value).font(.system(.title2, design: .monospaced).weight(.medium))
+                          .foregroundStyle(Theme.textPrimary)
+                      Text(label).font(.caption).foregroundStyle(Theme.textSecondary)
+                  }
+                  .frame(maxWidth: .infinity, alignment: .leading)
+              }
+          }
+
+          struct ThinBar: View {
+              let fraction: Double
+              var color: Color = Theme.accent
+              var body: some View {
+                  GeometryReader { geo in
+                      ZStack(alignment: .leading) {
+                          Capsule().fill(Theme.divider)
+                          Capsule().fill(color)
+                              .frame(width: max(0, min(1, fraction)) * geo.size.width)
+                      }
+                  }
+                  .frame(height: 4)
+              }
+          }
+          EOF_COMPONENTS
+
+          cat > Sources/HomeView.swift <<'EOF_HOME'
+          import SwiftUI
+
+          struct HomeView: View {
+              @EnvironmentObject private var store: Store
+              @State private var query = ""
+              @State private var phaseFilter: String? = nil
+              @State private var onlyFav = false
+              @State private var showMenu = false
+
+              var filtered: [Topic] {
+                  store.topics.filter { t in
+                      (phaseFilter == nil || t.phase == phaseFilter)
+                      && (!onlyFav || store.favs.contains(t.id))
+                      && (query.isEmpty || t.haystack.contains(query.lowercased()))
+                  }
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          VStack(alignment: .leading, spacing: 28) {
+                              if let error = store.loadError { errorCard(error) }
+                              continueCard
+                              overviewStats
+                              filterRow
+                              topicList
+                          }
+                          .padding(.horizontal, 20)
+                          .padding(.top, 16)
+                          .padding(.bottom, 40)
+                      }
+                      .background(Theme.bg)
+                      .navigationBarTitleDisplayMode(.inline)
+                      .searchable(text: $query,
+                                  placement: .navigationBarDrawer(displayMode: .always),
+                                  prompt: "Search / খুঁজুন")
+                      .toolbar {
+                          ToolbarItem(placement: .principal) {
+                              Text("SiteBook").font(.headline.weight(.semibold))
+                          }
+                          ToolbarItem(placement: .topBarTrailing) {
+                              Button { showMenu = true } label: {
+                                  Image(systemName: "line.3.horizontal")
+                              }
+                              .accessibilityLabel("Menu")
+                          }
+                      }
+                      .sheet(isPresented: $showMenu) { MenuSheet() }
+                      .navigationDestination(for: Int.self) { id in
+                          ReaderView(topicId: id)
+                      }
+                  }
+              }
+
+              private func errorCard(_ message: String) -> some View {
+                  VStack(alignment: .leading, spacing: 6) {
+                      Label("Data not loaded", systemImage: "exclamationmark.triangle.fill")
+                          .font(.subheadline.weight(.semibold))
+                          .foregroundStyle(Theme.warn)
+                      Text(message).font(.footnote).foregroundStyle(Theme.textSecondary)
+                      Button("Retry") { store.reload() }
+                          .font(.footnote.weight(.semibold))
+                          .foregroundStyle(Theme.accent)
+                  }
+                  .padding(12)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .background(Theme.surface)
+                  .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.divider, lineWidth: 1))
+                  .clipShape(RoundedRectangle(cornerRadius: 8))
+              }
+
+              @ViewBuilder
+              private var continueCard: some View {
+                  if let t = store.continueTopic {
+                      NavigationLink(value: t.id) {
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("CONTINUE")
+                                  .font(.caption.weight(.semibold)).tracking(0.5)
+                                  .foregroundStyle(Theme.textSecondary)
+                              Text(t.en).font(.headline).foregroundStyle(Theme.textPrimary)
+                                  .multilineTextAlignment(.leading)
+                              Text(t.bn).font(.subheadline).foregroundStyle(Theme.textSecondary)
+                                  .multilineTextAlignment(.leading)
+                              HStack(spacing: 6) {
+                                  Circle().fill(Theme.accent).frame(width: 5, height: 5)
+                                  Text(t.phase ?? "—").font(.caption).foregroundStyle(Theme.accent)
+                              }
+                              Hairline().padding(.vertical, 4)
+                              HStack {
+                                  Text(store.done.contains(t.id) ? "Review" : "Continue")
+                                      .font(.subheadline.weight(.semibold))
+                                      .foregroundStyle(Theme.accent)
+                                  Spacer()
+                                  Image(systemName: "arrow.right").foregroundStyle(Theme.accent)
+                              }
+                          }
+                          .padding(16)
+                          .background(Theme.surface)
+                          .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.divider, lineWidth: 1))
+                          .clipShape(RoundedRectangle(cornerRadius: 10))
+                      }
+                      .buttonStyle(.plain)
+                  }
+              }
+
+              private var overviewStats: some View {
+                  VStack(alignment: .leading, spacing: 12) {
+                      SectionHeader(text: "Overview")
+                      HStack(spacing: 16) {
+                          StatBlock(value: "\(store.topics.count)", label: "Topics")
+                          StatBlock(value: "\(store.phases.count)", label: "Phases")
+                          StatBlock(value: "\(store.done.count)", label: "Done")
+                      }
+                  }
+              }
+
+              private var filterRow: some View {
+                  HStack(spacing: 20) {
+                      Menu {
+                          Button("All phases") { phaseFilter = nil }
+                          Divider()
+                          ForEach(store.phases, id: \.self) { p in
+                              Button(p) { phaseFilter = p }
+                          }
+                      } label: {
+                          HStack(spacing: 4) {
+                              Text(phaseFilter ?? "All phases")
+                              Image(systemName: "chevron.down").font(.caption2)
+                          }
+                          .font(.subheadline)
+                          .foregroundStyle(phaseFilter == nil ? Theme.textSecondary : Theme.accent)
+                      }
+                      Button { onlyFav.toggle() } label: {
+                          HStack(spacing: 4) {
+                              Image(systemName: onlyFav ? "star.fill" : "star")
+                              Text("Favorites")
+                          }
+                          .font(.subheadline)
+                          .foregroundStyle(onlyFav ? Theme.accent : Theme.textSecondary)
+                      }
+                      .accessibilityLabel(onlyFav ? "Showing favorites only" : "Show favorites only")
+                      Spacer()
+                  }
+                  .padding(.vertical, 4)
+              }
+
+              private var topicList: some View {
+                  VStack(alignment: .leading, spacing: 0) {
+                      SectionHeader(text: "Topics")
+                      if filtered.isEmpty {
+                          Text("No results / কিছু পাওয়া যায়নি")
+                              .font(.body).foregroundStyle(Theme.textSecondary)
+                              .padding(.vertical, 32)
+                      } else {
+                          ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, t in
+                              NavigationLink(value: t.id) { row(t) }.buttonStyle(.plain)
+                              if idx < filtered.count - 1 { Hairline() }
+                          }
+                      }
+                  }
+              }
+
+              private func row(_ t: Topic) -> some View {
+                  HStack(alignment: .top, spacing: 12) {
+                      Text("\(t.id)")
+                          .font(.system(.subheadline, design: .monospaced).weight(.medium))
+                          .foregroundStyle(Theme.textSecondary)
+                          .frame(minWidth: 28, alignment: .leading)
+                          .padding(.top, 2)
+                      VStack(alignment: .leading, spacing: 3) {
+                          Text(t.en).font(.subheadline.weight(.semibold))
+                              .foregroundStyle(Theme.textPrimary).multilineTextAlignment(.leading)
+                          Text(t.bn).font(.subheadline)
+                              .foregroundStyle(Theme.textSecondary).multilineTextAlignment(.leading)
+                          HStack(spacing: 6) {
+                              Circle().fill(Theme.accent).frame(width: 4, height: 4)
+                              Text(t.phase ?? "—").font(.caption).foregroundStyle(Theme.accent)
+                          }
+                      }
+                      Spacer(minLength: 4)
+                      if store.done.contains(t.id) {
+                          Image(systemName: "checkmark").font(.footnote.weight(.semibold))
+                              .foregroundStyle(Theme.success)
+                      }
+                      if store.favs.contains(t.id) {
+                          Image(systemName: "star.fill").font(.footnote)
+                              .foregroundStyle(Theme.accent)
+                      }
+                  }
+                  .padding(.vertical, 12)
+                  .contentShape(Rectangle())
+              }
+          }
+          EOF_HOME
+
+          cat > Sources/ReaderView.swift <<'EOF_READER'
+          import SwiftUI
+
+          struct ReaderView: View {
+              @EnvironmentObject private var store: Store
+              @AppStorage("fontSizeIndex") private var fontSizeIndex: Int = 2
+              @State private var showFontSheet = false
+              @State private var cur: Int
+
+              init(topicId: Int) {
+                  _cur = State(initialValue: topicId)
+              }
+
+              private let typeSizes: [DynamicTypeSize] = [.small, .medium, .large, .xLarge, .xxLarge, .xxxLarge]
+              private var dynamicTypeSize: DynamicTypeSize {
+                  typeSizes[min(max(fontSizeIndex, 0), typeSizes.count - 1)]
+              }
+
+              private var topic: Topic? { store.topics.first(where: { $0.id == cur }) }
+              private var index: Int? { store.topics.firstIndex(where: { $0.id == cur }) }
+
+              var body: some View {
+                  Group {
+                      if let t = topic { content(t) }
+                      else { Text("Topic not found.").foregroundStyle(Theme.textSecondary) }
+                  }
+                  .background(Theme.bg)
+                  .navigationBarTitleDisplayMode(.inline)
+                  .toolbar {
+                      ToolbarItem(placement: .principal) {
+                          Text("\(cur) / \(store.topics.count)")
+                              .font(.system(.caption, design: .monospaced))
+                              .foregroundStyle(Theme.textSecondary)
+                      }
+                      ToolbarItem(placement: .topBarTrailing) {
+                          Menu {
+                              Button { store.toggleFav(cur) } label: {
+                                  Label(store.favs.contains(cur) ? "Remove favorite" : "Add to favorites",
+                                        systemImage: store.favs.contains(cur) ? "star.slash" : "star")
+                              }
+                              Button { showFontSheet = true } label: {
+                                  Label("Text size", systemImage: "textformat.size")
+                              }
+                              if let t = topic {
+                                  ShareLink(item: shareText(t)) { Label("Share", systemImage: "square.and.arrow.up") }
+                              }
+                          } label: { Image(systemName: "ellipsis.circle") }
+                          .accessibilityLabel("More")
+                      }
+                  }
+                  .dynamicTypeSize(dynamicTypeSize)
+                  .sheet(isPresented: $showFontSheet) {
+                      FontSheet(selection: $fontSizeIndex, options: typeSizes)
+                  }
+                  .onAppear { store.lastReadId = cur }
+                  .onDisappear { store.flushNotes() }
+              }
+
+              private func content(_ t: Topic) -> some View {
+                  ScrollView {
+                      VStack(alignment: .leading, spacing: 32) {
+                          header(t)
+                          if let what = t.what, !what.isEmpty { block { BodyText(text: what) } }
+                          if let why = t.why, !why.isEmpty {
+                              block(accent: Theme.warn) {
+                                  SectionHeader(text: "কেন করা হয়?")
+                                  BodyText(text: why)
+                              }
+                          }
+                          if let uses = t.uses, !uses.isEmpty {
+                              block { SectionHeader(text: "ব্যবহার"); BodyText(text: uses) }
+                          }
+                          if let steps = t.steps, !steps.isEmpty {
+                              block {
+                                  SectionHeader(text: "ধাপসমূহ")
+                                  VStack(alignment: .leading, spacing: 12) {
+                                      ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
+                                          NumberedItem(number: i + 1, text: s)
+                                      }
+                                  }
+                              }
+                          }
+                          if let ways = t.ways, !ways.isEmpty {
+                              block {
+                                  SectionHeader(text: "পদ্ধতি")
+                                  VStack(alignment: .leading, spacing: 10) {
+                                      ForEach(ways.indices, id: \.self) { i in BulletItem(text: ways[i]) }
+                                  }
+                              }
+                          }
+                          if let examples = t.examples, !examples.isEmpty {
+                              block {
+                                  SectionHeader(text: "উদাহরণ")
+                                  VStack(alignment: .leading, spacing: 12) {
+                                      ForEach(Array(examples.enumerated()), id: \.offset) { i, s in
+                                          NumberedItem(number: i + 1, text: s)
+                                      }
+                                  }
+                              }
+                          }
+                          if let mistakes = t.mistakes, !mistakes.isEmpty {
+                              CalloutSection(title: "সাধারণ ভুল",
+                                             icon: "exclamationmark.triangle.fill",
+                                             color: Theme.warn, items: mistakes)
+                          }
+                          if let risks = t.risks, !risks.isEmpty {
+                              CalloutSection(title: "ঝুঁকি",
+                                             icon: "flame.fill",
+                                             color: Theme.risk, items: risks)
+                          }
+                          if let tips = t.tips, !tips.isEmpty {
+                              block {
+                                  SectionHeader(text: "টিপস")
+                                  VStack(alignment: .leading, spacing: 10) {
+                                      ForEach(tips.indices, id: \.self) { i in BulletItem(text: tips[i]) }
+                                  }
+                              }
+                          }
+                          if let checklist = t.checklist, !checklist.isEmpty {
+                              checklistSection(topicId: t.id, items: checklist)
+                          }
+                          if let sources = t.sources, !sources.isEmpty {
+                              block {
+                                  SectionHeader(text: "সোর্স")
+                                  VStack(alignment: .leading, spacing: 8) {
+                                      ForEach(sources.indices, id: \.self) { i in
+                                          Text(sources[i]).font(.footnote).foregroundStyle(Theme.textSecondary)
+                                      }
+                                  }
+                              }
+                          }
+                          notesSection(topicId: t.id)
+                      }
+                      .padding(.horizontal, 20)
+                      .padding(.top, 20)
+                      .padding(.bottom, 32)
+                  }
+                  .safeAreaInset(edge: .bottom) { bottomBar(t) }
+              }
+
+              private func header(_ t: Topic) -> some View {
+                  VStack(alignment: .leading, spacing: 6) {
+                      if let phase = t.phase {
+                          HStack(spacing: 6) {
+                              Circle().fill(Theme.accent).frame(width: 5, height: 5)
+                              Text(phase).font(.caption.weight(.semibold)).tracking(0.4)
+                                  .foregroundStyle(Theme.textSecondary)
+                          }
+                      }
+                      Text(t.en).font(.title.weight(.bold)).foregroundStyle(Theme.textPrimary)
+                      Text(t.bn).font(.title3).lineSpacing(4).foregroundStyle(Theme.textSecondary)
+                      Hairline().padding(.top, 12)
+                  }
+              }
+
+              @ViewBuilder
+              private func block<C: View>(accent: Color? = nil, @ViewBuilder content: () -> C) -> some View {
+                  if let accent = accent {
+                      VStack(alignment: .leading, spacing: 0) { content() }
+                          .padding(.leading, 14)
+                          .overlay(alignment: .leading) { Rectangle().fill(accent).frame(width: 3) }
+                  } else {
+                      VStack(alignment: .leading, spacing: 0) { content() }
+                  }
+              }
+
+              private func checklistSection(topicId: Int, items: [String]) -> some View {
+                  VStack(alignment: .leading, spacing: 0) {
+                      SectionHeader(text: "চেকলিস্ট")
+                      VStack(alignment: .leading, spacing: 10) {
+                          ForEach(items.indices, id: \.self) { i in
+                              Button {
+                                  store.toggleChecked(topicId: topicId, itemIndex: i)
+                              } label: {
+                                  HStack(alignment: .top, spacing: 10) {
+                                      Image(systemName: store.isChecked(topicId: topicId, itemIndex: i)
+                                            ? "checkmark.square.fill" : "square")
+                                          .foregroundStyle(store.isChecked(topicId: topicId, itemIndex: i)
+                                                           ? Theme.success : Theme.textSecondary)
+                                      Text(items[i]).font(.body).lineSpacing(4)
+                                          .foregroundStyle(Theme.textPrimary)
+                                          .multilineTextAlignment(.leading)
+                                          .frame(maxWidth: .infinity, alignment: .leading)
+                                  }
+                              }
+                              .buttonStyle(.plain)
+                          }
+                      }
+                  }
+              }
+
+              private func notesSection(topicId: Int) -> some View {
+                  let binding = Binding<String>(
+                      get: { store.notes["\(topicId)"] ?? "" },
+                      set: { store.setNote(topicId: topicId, text: $0) }
+                  )
+                  return VStack(alignment: .leading, spacing: 0) {
+                      SectionHeader(text: "আমার নোট")
+                      TextEditor(text: binding)
+                          .font(.body)
+                          .scrollContentBackground(.hidden)
+                          .frame(minHeight: 100)
+                          .padding(8)
+                          .background(Theme.surface)
+                          .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.divider, lineWidth: 1))
+                          .clipShape(RoundedRectangle(cornerRadius: 8))
+                  }
+              }
+
+              private func bottomBar(_ t: Topic) -> some View {
+                  HStack {
+                      Button {
+                          store.toggleDone(t.id)
+                      } label: {
+                          HStack(spacing: 6) {
+                              Image(systemName: store.done.contains(t.id) ? "checkmark.circle.fill" : "circle")
+                              Text(store.done.contains(t.id) ? "Done" : "Mark done")
+                          }
+                          .font(.subheadline.weight(.semibold))
+                          .foregroundStyle(store.done.contains(t.id) ? Theme.success : Theme.accent)
+                      }
+                      Spacer()
+                      HStack(spacing: 12) {
+                          Button { goPrev() } label: { Image(systemName: "chevron.left") }
+                              .disabled(!canGoPrev)
+                              .accessibilityLabel("Previous topic")
+                          Text("\(index.map { $0 + 1 } ?? 0) / \(store.topics.count)")
+                              .font(.system(.caption, design: .monospaced))
+                              .foregroundStyle(Theme.textSecondary)
+                          Button { goNext() } label: { Image(systemName: "chevron.right") }
+                              .disabled(!canGoNext)
+                              .accessibilityLabel("Next topic")
+                      }
+                      .foregroundStyle(Theme.accent)
+                  }
+                  .padding(.horizontal, 20)
+                  .padding(.vertical, 12)
+                  .background(
+                      Theme.surface.overlay(alignment: .top) {
+                          Rectangle().fill(Theme.divider).frame(height: 1)
+                      }
+                  )
+              }
+
+              private var canGoPrev: Bool { (index ?? 0) > 0 }
+              private var canGoNext: Bool { (index ?? 0) < store.topics.count - 1 }
+
+              private func goPrev() {
+                  guard let i = index, i > 0 else { return }
+                  store.flushNotes()
+                  cur = store.topics[i - 1].id
+                  store.lastReadId = cur
+              }
+
+              private func goNext() {
+                  guard let i = index, i < store.topics.count - 1 else { return }
+                  store.flushNotes()
+                  cur = store.topics[i + 1].id
+                  store.lastReadId = cur
+              }
+
+              private func shareText(_ t: Topic) -> String {
+                  var o = "\(t.en)\n\(t.bn)\n\n\(t.what ?? "")"
+                  if let steps = t.steps {
+                      o += "\n\nধাপ:\n" + steps.enumerated().map { "\($0.offset + 1). \($0.element)" }
+                          .joined(separator: "\n")
+                  }
+                  return o
+              }
+          }
+          EOF_READER
+
+          cat > Sources/ProgressScreen.swift <<'EOF_PROGRESS'
+          import SwiftUI
+
+          struct ProgressScreen: View {
+              @EnvironmentObject private var store: Store
+
+              private var fraction: Double {
+                  guard !store.topics.isEmpty else { return 0 }
+                  return Double(store.done.count) / Double(store.topics.count)
+              }
+
+              var body: some View {
+                  ScrollView {
+                      VStack(alignment: .leading, spacing: 32) {
+                          overall
+                          byPhase
+                          needsAttention
+                      }
+                      .padding(20)
+                  }
+                  .background(Theme.bg)
+                  .navigationTitle("Progress")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+
+              private var overall: some View {
+                  VStack(alignment: .leading, spacing: 12) {
+                      SectionHeader(text: "Overall")
+                      HStack(alignment: .firstTextBaseline, spacing: 6) {
+                          Text("\(store.done.count)")
+                              .font(.system(size: 34, weight: .medium, design: .monospaced))
+                              .foregroundStyle(Theme.textPrimary)
+                          Text("/ \(store.topics.count)")
+                              .font(.system(.title3, design: .monospaced))
+                              .foregroundStyle(Theme.textSecondary)
+                      }
+                      Text("\(Int(fraction * 100))% complete")
+                          .font(.caption).foregroundStyle(Theme.textSecondary)
+                      ThinBar(fraction: fraction)
+                  }
+              }
+
+              private var byPhase: some View {
+                  VStack(alignment: .leading, spacing: 16) {
+                      SectionHeader(text: "By phase")
+                      ForEach(store.phases, id: \.self) { phase in
+                          let total = store.topics(forPhase: phase).count
+                          let done = store.doneCount(inPhase: phase)
+                          let f = total == 0 ? 0 : Double(done) / Double(total)
+                          VStack(alignment: .leading, spacing: 6) {
+                              HStack {
+                                  Text(phase).font(.subheadline).foregroundStyle(Theme.textPrimary)
+                                  Spacer()
+                                  Text("\(done) / \(total)")
+                                      .font(.system(.caption, design: .monospaced))
+                                      .foregroundStyle(Theme.textSecondary)
+                              }
+                              ThinBar(fraction: f)
+                          }
+                      }
+                  }
+              }
+
+              private var needsAttention: some View {
+                  VStack(alignment: .leading, spacing: 12) {
+                      SectionHeader(text: "Needs attention")
+                      HStack(spacing: 8) {
+                          Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warn)
+                          Text("\(store.topicsWithMistakes) topics contain common mistakes")
+                              .font(.subheadline).foregroundStyle(Theme.textPrimary)
+                      }
+                      HStack(spacing: 8) {
+                          Image(systemName: "flame.fill").foregroundStyle(Theme.risk)
+                          Text("\(store.topicsWithRisks) topics contain open risks")
+                              .font(.subheadline).foregroundStyle(Theme.textPrimary)
+                      }
+                  }
+              }
+          }
+          EOF_PROGRESS
+
+          cat > Sources/NotesScreen.swift <<'EOF_NOTES'
+          import SwiftUI
+
+          struct NotesScreen: View {
+              @EnvironmentObject private var store: Store
+
+              var body: some View {
+                  ScrollView {
+                      VStack(alignment: .leading, spacing: 0) {
+                          if store.notesSorted.isEmpty {
+                              Text("No notes yet. Open any topic and write one.")
+                                  .font(.body).foregroundStyle(Theme.textSecondary)
+                                  .padding(.vertical, 40)
+                                  .frame(maxWidth: .infinity)
+                          } else {
+                              ForEach(Array(store.notesSorted.enumerated()), id: \.element.topicId) { idx, entry in
+                                  NavigationLink(value: entry.topicId) {
+                                      VStack(alignment: .leading, spacing: 4) {
+                                          Text("\(entry.topicId) · \(entry.topic.en)")
+                                              .font(.subheadline.weight(.semibold))
+                                              .foregroundStyle(Theme.textPrimary)
+                                          Text(entry.text)
+                                              .font(.footnote).lineLimit(2)
+                                              .foregroundStyle(Theme.textSecondary)
+                                      }
+                                      .frame(maxWidth: .infinity, alignment: .leading)
+                                      .padding(.vertical, 14)
+                                      .contentShape(Rectangle())
+                                  }
+                                  .buttonStyle(.plain)
+                                  if idx < store.notesSorted.count - 1 { Hairline() }
+                              }
+                          }
+                      }
+                      .padding(.horizontal, 20)
+                  }
+                  .background(Theme.bg)
+                  .navigationTitle("Notes")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+          }
+          EOF_NOTES
+
+          cat > Sources/MenuSheet.swift <<'EOF_MENU'
+          import SwiftUI
+
+          struct MenuSheet: View {
+              @Environment(\.dismiss) private var dismiss
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          NavigationLink { ProgressScreen() } label: {
+                              Label("Progress", systemImage: "chart.bar")
+                          }
+                          NavigationLink { NotesScreen() } label: {
+                              Label("Notes", systemImage: "square.and.pencil")
+                          }
+                      }
+                      .navigationTitle("More")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .topBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                      .navigationDestination(for: Int.self) { id in
+                          ReaderView(topicId: id)
+                      }
+                  }
+              }
+          }
+          EOF_MENU
+
+          cat > Sources/FontSheet.swift <<'EOF_FONT'
+          import SwiftUI
+
+          struct FontSheet: View {
+              @Binding var selection: Int
+              let options: [DynamicTypeSize]
+              @Environment(\.dismiss) private var dismiss
+
+              private var labels: [String] {
+                  options.map {
+                      switch $0 {
+                      case .small: return "Small"
+                      case .medium: return "Medium"
+                      case .large: return "Default"
+                      case .xLarge: return "Large"
+                      case .xxLarge: return "X-Large"
+                      case .xxxLarge: return "XX-Large"
+                      default: return "\($0)"
+                      }
+                  }
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      VStack(alignment: .leading, spacing: 20) {
+                          Text("Aa").font(.system(size: 34)).foregroundStyle(Theme.textPrimary)
+                          Text("দেখতে যেমন লাগবে / Preview")
+                              .font(.body).foregroundStyle(Theme.textSecondary)
+                          Text("নমুনা লেখা — এখানে টেক্সট দেখতে যেমন হবে।")
+                              .font(.body).lineSpacing(5).foregroundStyle(Theme.textPrimary)
+                          Hairline()
+                          ForEach(options.indices, id: \.self) { i in
+                              Button { selection = i } label: {
+                                  HStack {
+                                      Text(labels[i]).foregroundStyle(Theme.textPrimary)
+                                      Spacer()
+                                      if selection == i {
+                                          Image(systemName: "checkmark").foregroundStyle(Theme.accent)
+                                      }
+                                  }
+                              }
+                              .buttonStyle(.plain)
+                              .padding(.vertical, 6)
+                          }
+                          Spacer()
+                      }
+                      .padding(20)
+                      .background(Theme.bg)
+                      .navigationTitle("Text size")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .topBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF_FONT
+
+          cat > Sources/App.swift <<'EOF_APP'
+          import SwiftUI
+
+          @main
+          struct SiteBookApp: App {
+              @StateObject private var store = Store()
+              var body: some Scene {
+                  WindowGroup {
+                      HomeView().environmentObject(store)
+                  }
+              }
+          }
+          EOF_APP
+
+          cat > Sources/Resources/topics.json <<'EOF_JSON'
+          [
+            {"id":1,"en":"Site Survey & Soil Test","bn":"সাইট সার্ভে ও মাটি পরীক্ষা","phase":"১. জরিপ",
+             "what":"নির্মাণের আগে সাইটের মাটি, ভূগর্ভস্থ পানি ও আশপাশের অবস্থা পরীক্ষা করা হয়। বোরহোল ড্রিলিং, SPT, ল্যাব টেস্ট — এসবের মাধ্যমে ভিত্তি ডিজাইনের তথ্য পাওয়া যায়।",
+             "why":"ভুল ফাউন্ডেশন ডিজাইন ভবনের অসম বসে যাওয়া, ফাটল ও ভূমিকম্পে ধসের কারণ হতে পারে।",
+             "steps":["সাইটে ২–৩টি বোরহোল ড্রিল করুন","প্রতি ১.৫ মিটারে SPT টেস্ট করুন","মাটির নমুনা সংগ্রহ করে ল্যাব টেস্ট করান","ভূগর্ভস্থ পানির লেভেল রেকর্ড করুন","সব তথ্য দিয়ে সয়েল রিপোর্ট তৈরি করুন"],
+             "mistakes":["প্রয়োজনের চেয়ে কম বোরহোল","পানির লেভেল রেকর্ড না করা","আশপাশের ভবনের ডিজাইন না দেখে সিদ্ধান্ত"],
+             "tips":["বর্ষার শেষে ও শুষ্ক মৌসুমে পানির লেভেল আলাদা হতে পারে","পাশের প্লটের বোরলগ থাকলে তুলনা করুন"],
+             "checklist":["বোরহোলের অবস্থান প্ল্যানে","প্রতি ১.৫ মি-এ SPT","ল্যাব রিপোর্ট","স্ট্রাকচারাল ইঞ্জিনিয়ারের স্বাক্ষর"]},
+            {"id":2,"en":"Land Survey & Setout","bn":"ভূমি জরিপ ও সেটআউট","phase":"১. জরিপ",
+             "what":"দলিল-খতিয়ানের সাথে মিলিয়ে জমি মাপা, সীমানা নির্ধারণ এবং গ্রিড লাইন ও লেভেল চিহ্নিত করা।",
+             "why":"ভুল সেটআউটে ভবন পাশের প্লটে ঢুকে যায়, ড্রেনেজ উল্টো দিকে বইতে পারে।",
+             "steps":["দলিল-খতিয়ানের সাথে ক্ষেত্রফল মিলান","Total Station দিয়ে সবকটি কর্নারের কোঅর্ডিনেট নিন","স্থায়ী বেঞ্চমার্ক স্থাপন করুন","গ্রিড লাইন ও লেভেল চিহ্নিত করুন","সব পয়েন্ট কংক্রিট পেগে স্থায়ী করুন"],
+             "mistakes":["শুধু খতিয়ানের মাপে বিশ্বাস","কন্ট্রোল পয়েন্ট ছাড়া Total Station","সীমানা যাচাই না করা"],
+             "tips":["স্থায়ী বেঞ্চমার্ক সাইটের বাইরে রাখুন","বাউন্ডারি পিলারের ছবি ও কোঅর্ডিনেট সংরক্ষণ করুন"],
+             "checklist":["ক্ষেত্রফল মিলানো","কর্নারের কোঅর্ডিনেট","গ্রিড ও কনট্যুর","সার্ভেয়ারের স্বাক্ষর"]},
+            {"id":3,"en":"RCC Column Design","bn":"আরসিসি কলাম ডিজাইন","phase":"৩. কাঠামো",
+             "what":"কলাম হলো ভার্টিকাল স্ট্রাকচারাল এলিমেন্ট যা স্ল্যাব ও বিমের লোড ফাউন্ডেশনে নামায়। ডিজাইনে লোড, গ্রেড, রডের সংখ্যা ও স্পেসিং নির্ধারিত হয়।",
+             "why":"কলামে লোড সঠিকভাবে না নামালে স্ল্যাব ফেটে যায়, পুরো ভবন অসম বসে যায়, ভূমিকম্পে ধস নামে।",
+             "uses":"বহুতলা ভবনের ভার্টিকাল লোড ট্রান্সফার, ভূমিকম্প প্রতিরোধ, স্প্যান সাপোর্ট।",
+             "steps":["কলামের অবস্থান ও গ্রিড নির্ধারণ","লোড ক্যালকুলেশন (ডেড, লাইভ, সাইসমিক)","কংক্রিট গ্রেড ও স্টিল গ্রেড নির্বাচন","রডের সংখ্যা ও স্পেসিং নির্ধারণ (BNBC অনুযায়ী)","টাই ও ল্যাপ ডিটেইল ঠিক করা","স্ট্রাকচারাল ইঞ্জিনিয়ারের স্বাক্ষর"],
+             "mistakes":["কলামে ন্যূনতম রড না রাখা","কভার ব্লক না দেওয়া","ল্যাপ লেংথ কম রাখা"],
+             "risks":["Punching shear failure","Differential settlement","ভূমিকম্পে ধস"],
+             "tips":["ঢালাইয়ের আগে রড চেকলিস্টে ইঞ্জিনিয়ারের সই নিন","নির্ধারিত মাপের কভার ব্লক ব্যবহার করুন"],
+             "checklist":["লোড ক্যালকুলেশন","রডের সংখ্যা ও স্পেসিং","ল্যাপ ও হুক","কভার","থার্ড-পার্টি যাচাই"]},
+            {"id":4,"en":"Concrete Curing & Waterproofing","bn":"কংক্রিট কিউরিং ও ওয়াটারপ্রুফিং","phase":"৪. কাজ ও মান",
+             "what":"ঢালাইয়ের পর কংক্রিটে পর্যাপ্ত আর্দ্রতা ধরে রেখে শক্তি অর্জনে সাহায্য করা হলো কিউরিং। ওয়াটারপ্রুফিং ছাদ, বাথরুম ও বেসমেন্টে পানি ঢোকা রোধ করে।",
+             "why":"কিউরিং ঠিক না হলে ফাটল ও কম শক্তি হয়; ওয়াটারপ্রুফিং ভুল হলে পরে লিক ঠিক করা ব্যয়বহুল।",
+             "steps":["ঢালাইয়ের পর নির্ধারিত সময়ে কিউরিং শুরু","পানি দিয়ে ভেজা রাখা বা ভেজা চট ব্যবহার","স্পেক অনুযায়ী নির্ধারিত দিন পর্যন্ত চালু রাখা","ওয়াটারপ্রুফিংয়ের আগে পৃষ্ঠ পরিষ্কার ও ঢাল ঠিক","ম্যাটেরিয়াল প্রয়োগ ও ওভারল্যাপ","পন্ডিং টেস্ট করে যাচাই"],
+             "mistakes":["কিউরিং মাঝপথে বন্ধ","কর্নার ও পাইপ জয়েন্টে সিল না করা"],
+             "risks":["কংক্রিটে ফাটল","ড্যাম্প ও লিকেজ","পরে ব্যয়বহুল মেরামত"],
+             "tips":["গরম ও বাতাসের দিনে বেশি সতর্ক থাকুন","কিউরিংয়ের তারিখ বোর্ডে লিখুন"],
+             "checklist":["কিউরিং শুরু ও দিন","পৃষ্ঠ প্রস্তুতি","ম্যাটেরিয়াল প্রয়োগ","পন্ডিং টেস্ট"]},
+            {"id":5,"en":"Site Safety (HSE)","bn":"সাইট নিরাপত্তা (এইচএসই)","phase":"৫. নিরাপত্তা",
+             "what":"Health, Safety & Environment — সাইটে দুর্ঘটনা, অসুস্থতা ও পরিবেশ ক্ষতি রোধের পরিকল্পিত ব্যবস্থা। PPE, ঝুঁকি বিশ্লেষণ, প্রশিক্ষণ, স্ক্যাফোল্ডিং ও বিদ্যুৎ নিরাপত্তা অন্তর্ভুক্ত।",
+             "why":"নির্মাণ খাত দুর্ঘটনাপ্রবণ; একটি দুর্ঘটনা কাজ বন্ধ, ক্ষতিপূরণ ও সুনাম নষ্টের কারণ।",
+             "steps":["সাইটের ঝুঁকি চিহ্নিত করে নিরাপত্তা পরিকল্পনা","সেফটি অফিসার নিয়োগ","সবাইকে PPE প্রদান","নতুন শ্রমিককে ইন্ডাকশন ট্রেনিং","দৈনিক টুলবক্স টক ও সাপ্তাহিক পরিদর্শন","ঘটনা ও নিয়ার-মিস লিখে রাখা"],
+             "ways":["JHA (Job Hazard Analysis)","Permit-to-Work","Toolbox Talk","Safety Audit"],
+             "mistakes":["PPE দিয়ে ব্যবহার তদারকি না করা","ছোট ঘটনা লিখে না রাখা"],
+             "risks":["জানহানি","কাজ বন্ধ ও জরিমানা","আইনি সমস্যা"],
+             "tips":["সবার চোখে পড়ে এমন নিরাপত্তা বোর্ড রাখুন","জরুরি যোগাযোগ নম্বর গেটে ঝোলান"],
+             "checklist":["PPE","JHA","ইন্ডাকশন","প্রাথমিক চিকিৎসা বক্স","ফায়ার এক্সটিংগুইশার"]},
+            {"id":6,"en":"Handover & As-built Drawing","bn":"হস্তান্তর ও এজ-বিল্ট ড্রয়িং","phase":"৬. হস্তান্তর",
+             "what":"কাজ শেষে ভবন মালিককে বুঝিয়ে দেওয়ার প্রক্রিয়া। এজ-বিল্ট ড্রয়িং, ম্যানুয়াল, ওয়ারেন্টি ও টেস্ট রিপোর্ট সহ।",
+             "why":"এজ-বিল্ট ছাড়া ভেতরের পাইপ, কনডুইট ও কাঠামোর প্রকৃত অবস্থান জানা যায় না; ভবিষ্যতে ড্রিলিং বা সংস্কারে ক্ষতির ঝুঁকি।",
+             "steps":["চূড়ান্ত পরিদর্শন ও Punch List তৈরি","Punch List-এর কাজ সম্পন্ন","কমিশনিং ও টেস্ট রিপোর্ট সংগ্রহ","এজ-বিল্ট ড্রয়িং ও ম্যানুয়াল ফাইল","মালিককে পরিচালনার প্রশিক্ষণ","চাবি/কার্ড ও সার্টিফিকেট হস্তান্তর"],
+             "mistakes":["Punch List ছাড়া তাড়াহুড়ো","এজ-বিল্ট শেষ মুহূর্তে বানানো"],
+             "risks":["পরে দায় নিয়ে বিরোধ","সংস্কারে লুকানো পাইপে ক্ষতি"],
+             "tips":["কাজ চলাকালীনই মার্ক-আপ ড্রয়িং রাখুন","হস্তান্তরের দিন মিটার রিডিং লিখে রাখুন"],
+             "checklist":["Punch List ক্লোজ","টেস্ট রিপোর্ট","এজ-বিল্ট ড্রয়িং","ম্যানুয়াল ও ওয়ারেন্টি","হস্তান্তর সার্টিফিকেট"]}
+          ]
+          EOF_JSON
+          echo "files written."
+
+      - name: Validate topics.json
+        run: |
+          set -euo pipefail
+          python3 -c "import json;d=json.load(open('Sources/Resources/topics.json'));print('topics:',len(d))"
+
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          ls -la SiteBook.xcodeproj
+
+      - name: Build (unsigned)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project SiteBook.xcodeproj \
+            -scheme SiteBook \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          mkdir -p Payload
+          rm -rf Payload/SiteBook.app
+          cp -R build/Build/Products/Release-iphoneos/SiteBook.app Payload/
+          ZIP_NAME="SiteBook-unsigned-${GITHUB_SHA::7}.ipa"
+          zip -qry "$ZIP_NAME" Payload
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SiteBook-ipa-${{ github.sha }}
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 14
+          if-no-files-found: error
