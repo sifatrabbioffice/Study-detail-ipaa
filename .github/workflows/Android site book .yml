@@ -1,1 +1,1677 @@
+name: Build Android Universal APK
 
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Write project files
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/java/com/sitebook/app
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/values-night
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/assets
+
+          cat > settings.gradle.kts <<'EOF_SETTINGS'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "SiteBook"
+          include(":app")
+          EOF_SETTINGS
+
+          cat > build.gradle.kts <<'EOF_ROOT'
+          plugins {
+              id("com.android.application") version "8.7.2" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+              id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21" apply false
+          }
+          EOF_ROOT
+
+          cat > gradle.properties <<'EOF_PROPS'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          EOF_PROPS
+
+          cat > app/build.gradle.kts <<'EOF_APPGRADLE'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+              id("org.jetbrains.kotlin.plugin.serialization")
+          }
+
+          android {
+              namespace = "com.sitebook.app"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.sitebook.app"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              buildFeatures {
+                  compose = true
+              }
+
+              packaging {
+                  resources {
+                      excludes += "/META-INF/{AL2.0,LGPL2.1}"
+                  }
+              }
+          }
+
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.10.01"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.material:material-icons-extended")
+              implementation("androidx.activity:activity-compose:1.9.3")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+          }
+          EOF_APPGRADLE
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF_MANIFEST'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.SiteBook">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+                      android:theme="@style/Theme.SiteBook">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF_MANIFEST
+
+          cat > app/src/main/res/values/strings.xml <<'EOF_STRINGS'
+          <resources>
+              <string name="app_name">SiteBook</string>
+          </resources>
+          EOF_STRINGS
+
+          cat > app/src/main/res/values/themes.xml <<'EOF_THEMES'
+          <resources>
+              <style name="Theme.SiteBook" parent="android:Theme.Material.Light.NoActionBar" />
+          </resources>
+          EOF_THEMES
+
+          cat > app/src/main/res/values-night/themes.xml <<'EOF_THEMESN'
+          <resources>
+              <style name="Theme.SiteBook" parent="android:Theme.Material.NoActionBar" />
+          </resources>
+          EOF_THEMESN
+
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'EOF_ICON'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="48dp"
+              android:height="48dp"
+              android:viewportWidth="48"
+              android:viewportHeight="48">
+              <path android:fillColor="#0F6E6B" android:pathData="M8,4h32a4,4 0 0 1 4,4v32a4,4 0 0 1 -4,4H8a4,4 0 0 1 -4,-4V8a4,4 0 0 1 4,-4z"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M14,14h20v4H14zM14,22h16v3H14zM14,29h12v3H14z"/>
+          </vector>
+          EOF_ICON
+          echo "gradle+manifest+resources written."
+
+          cat > app/src/main/java/com/sitebook/app/Models.kt <<'EOF_MODELS'
+          package com.sitebook.app
+
+          import kotlinx.serialization.Serializable
+
+          @Serializable
+          data class Topic(
+              val id: Int,
+              val en: String,
+              val bn: String,
+              val phase: String? = null,
+              val what: String? = null,
+              val why: String? = null,
+              val uses: String? = null,
+              val steps: List<String>? = null,
+              val ways: List<String>? = null,
+              val sources: List<String>? = null,
+              val examples: List<String>? = null,
+              val mistakes: List<String>? = null,
+              val checklist: List<String>? = null,
+              val tips: List<String>? = null,
+              val risks: List<String>? = null,
+          )
+
+          val Topic.haystack: String
+              get() {
+                  val all = listOfNotNull(en, bn, what, why, uses) +
+                      (steps ?: emptyList()) +
+                      (ways ?: emptyList()) +
+                      (sources ?: emptyList()) +
+                      (examples ?: emptyList()) +
+                      (mistakes ?: emptyList()) +
+                      (tips ?: emptyList()) +
+                      (risks ?: emptyList()) +
+                      (checklist ?: emptyList())
+                  return all.joinToString(" ").lowercase()
+              }
+          EOF_MODELS
+
+          cat > app/src/main/java/com/sitebook/app/Theme.kt <<'EOF_THEME'
+          package com.sitebook.app
+
+          import androidx.compose.foundation.isSystemInDarkTheme
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.darkColorScheme
+          import androidx.compose.material3.lightColorScheme
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.CompositionLocalProvider
+          import androidx.compose.runtime.staticCompositionLocalOf
+          import androidx.compose.ui.graphics.Color
+
+          data class SiteBookPalette(
+              val bg: Color,
+              val surface: Color,
+              val textPrimary: Color,
+              val textSecondary: Color,
+              val divider: Color,
+              val accent: Color,
+              val risk: Color,
+              val warn: Color,
+              val success: Color,
+          )
+
+          val LightPalette = SiteBookPalette(
+              bg = Color(0xFFF7F7F8),
+              surface = Color(0xFFFFFFFF),
+              textPrimary = Color(0xFF111114),
+              textSecondary = Color(0xFF6B6B72),
+              divider = Color(0xFFE4E4E9),
+              accent = Color(0xFF0F6E6B),
+              risk = Color(0xFFB42318),
+              warn = Color(0xFFB54708),
+              success = Color(0xFF067647),
+          )
+
+          val DarkPalette = SiteBookPalette(
+              bg = Color(0xFF0E0E10),
+              surface = Color(0xFF1A1A1D),
+              textPrimary = Color(0xFFF2F2F5),
+              textSecondary = Color(0xFF9A9AA3),
+              divider = Color(0xFF2A2A2F),
+              accent = Color(0xFF3FA39F),
+              risk = Color(0xFFF97066),
+              warn = Color(0xFFFDB022),
+              success = Color(0xFF47CD89),
+          )
+
+          val LocalPalette = staticCompositionLocalOf { LightPalette }
+          val palette: SiteBookPalette
+              @Composable get() = LocalPalette.current
+
+          @Composable
+          fun SiteBookTheme(content: @Composable () -> Unit) {
+              val p = if (isSystemInDarkTheme()) DarkPalette else LightPalette
+              val scheme = if (isSystemInDarkTheme()) darkColorScheme(
+                  primary = p.accent, background = p.bg, surface = p.surface,
+                  onBackground = p.textPrimary, onSurface = p.textPrimary
+              ) else lightColorScheme(
+                  primary = p.accent, background = p.bg, surface = p.surface,
+                  onBackground = p.textPrimary, onSurface = p.textPrimary
+              )
+              CompositionLocalProvider(LocalPalette provides p) {
+                  MaterialTheme(colorScheme = scheme, content = content)
+              }
+          }
+          EOF_THEME
+
+          cat > app/src/main/java/com/sitebook/app/Store.kt <<'EOF_STORE'
+          package com.sitebook.app
+
+          import android.content.Context
+          import android.content.SharedPreferences
+          import androidx.compose.runtime.getValue
+          import androidx.compose.runtime.mutableStateOf
+          import androidx.compose.runtime.setValue
+          import kotlinx.serialization.encodeToString
+          import kotlinx.serialization.json.Json
+
+          class Store(private val context: Context) {
+              private val prefs: SharedPreferences =
+                  context.getSharedPreferences("sitebook", Context.MODE_PRIVATE)
+              private val json = Json { ignoreUnknownKeys = true }
+
+              var topics by mutableStateOf<List<Topic>>(emptyList())
+                  private set
+              var loadError by mutableStateOf<String?>(null)
+                  private set
+
+              var favs by mutableStateOf<Set<Int>>(emptySet())
+              var done by mutableStateOf<Set<Int>>(emptySet())
+              var checked by mutableStateOf<Map<Int, Set<Int>>>(emptyMap())
+              var notes by mutableStateOf<Map<Int, String>>(emptyMap())
+              var lastReadId by mutableStateOf<Int?>(null)
+              var fontSizeIndex by mutableStateOf(2)
+
+              init {
+                  load()
+                  restore()
+              }
+
+              private fun load() {
+                  try {
+                      val text = context.assets.open("topics.json").bufferedReader().use { it.readText() }
+                      topics = json.decodeFromString<List<Topic>>(text).sortedBy { it.id }
+                  } catch (e: Exception) {
+                      loadError = "Failed to load topics.json: ${e.message}"
+                      topics = emptyList()
+                  }
+              }
+
+              fun reload() { load() }
+
+              private fun restore() {
+                  favs = prefs.getStringSet("favs", emptySet())
+                      ?.mapNotNull { it.toIntOrNull() }?.toSet() ?: emptySet()
+                  done = prefs.getStringSet("done", emptySet())
+                      ?.mapNotNull { it.toIntOrNull() }?.toSet() ?: emptySet()
+                  prefs.getString("checked", null)?.let { s ->
+                      try {
+                          val raw = json.decodeFromString<Map<String, List<Int>>>(s)
+                          checked = raw.mapNotNull { (k, v) ->
+                              k.toIntOrNull()?.let { it to v.toSet() }
+                          }.toMap()
+                      } catch (_: Exception) {}
+                  }
+                  prefs.getString("notes", null)?.let { s ->
+                      try {
+                          val raw = json.decodeFromString<Map<String, String>>(s)
+                          notes = raw.mapNotNull { (k, v) ->
+                              k.toIntOrNull()?.let { it to v }
+                          }.toMap()
+                      } catch (_: Exception) {}
+                  }
+                  val lr = prefs.getInt("lastReadId", -1)
+                  if (lr >= 0) lastReadId = lr
+                  fontSizeIndex = prefs.getInt("fontSizeIndex", 2)
+              }
+
+              fun persist() {
+                  prefs.edit()
+                      .putStringSet("favs", favs.map { it.toString() }.toSet())
+                      .putStringSet("done", done.map { it.toString() }.toSet())
+                      .putString("checked",
+                          json.encodeToString<Map<String, List<Int>>>(
+                              checked.mapKeys { it.key.toString() }.mapValues { it.value.toList() }))
+                      .putString("notes",
+                          json.encodeToString<Map<String, String>>(
+                              notes.mapKeys { it.key.toString() }))
+                      .putInt("lastReadId", lastReadId ?: -1)
+                      .putInt("fontSizeIndex", fontSizeIndex)
+                      .apply()
+              }
+
+              private fun persistNotesOnly() {
+                  prefs.edit().putString("notes",
+                      json.encodeToString<Map<String, String>>(
+                          notes.mapKeys { it.key.toString() })).apply()
+              }
+
+              fun toggleFav(id: Int) {
+                  favs = if (id in favs) favs - id else favs + id
+                  persist()
+              }
+
+              fun toggleDone(id: Int) {
+                  done = if (id in done) done - id else done + id
+                  persist()
+              }
+
+              fun toggleChecked(topicId: Int, itemIndex: Int) {
+                  val cur = checked[topicId] ?: emptySet()
+                  checked = checked + (topicId to
+                          (if (itemIndex in cur) cur - itemIndex else cur + itemIndex))
+                  persist()
+              }
+
+              fun isChecked(topicId: Int, itemIndex: Int) =
+                  checked[topicId]?.contains(itemIndex) == true
+
+              fun setNote(topicId: Int, text: String) {
+                  notes = notes + (topicId to text)
+                  persistNotesOnly()
+              }
+
+              fun flushNotes() { persistNotesOnly() }
+
+              val phases: List<String>
+                  get() {
+                      val seen = mutableSetOf<String>()
+                      return topics.mapNotNull { it.phase }.filter { seen.add(it) }
+                  }
+
+              val continueTopic: Topic?
+                  get() {
+                      lastReadId?.let { id -> topics.find { it.id == id } }?.let { return it }
+                      return topics.firstOrNull { it.id !in done } ?: topics.firstOrNull()
+                  }
+
+              val notesSorted: List<Topic>
+                  get() = notes.filter { (_, v) -> v.isNotBlank() }
+                      .mapNotNull { (id, _) -> topics.find { it.id == id } }
+                      .sortedBy { it.id }
+          }
+          EOF_STORE
+
+          cat > app/src/main/java/com/sitebook/app/Components.kt <<'EOF_COMPONENTS'
+          package com.sitebook.app
+
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Box
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.IntrinsicSize
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.Spacer
+          import androidx.compose.foundation.layout.fillMaxHeight
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.height
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.layout.size
+          import androidx.compose.foundation.layout.width
+          import androidx.compose.foundation.layout.widthIn
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.Icon
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.graphics.vector.ImageVector
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextAlign
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          @Composable
+          fun SectionHeader(text: String) {
+              Text(
+                  text = text.uppercase(),
+                  style = TextStyle(
+                      fontSize = 12.sp,
+                      fontWeight = FontWeight.SemiBold,
+                      letterSpacing = 0.4.sp,
+                      color = palette.textSecondary,
+                  ),
+                  modifier = Modifier.padding(bottom = 12.dp),
+              )
+          }
+
+          @Composable
+          fun Hairline(modifier: Modifier = Modifier) {
+              Box(modifier.fillMaxWidth().height(1.dp).background(palette.divider))
+          }
+
+          @Composable
+          fun BulletItem(
+              text: String,
+              dot: Color = palette.accent,
+              size: Float = 16f,
+              line: Float = 24f,
+          ) {
+              Row(verticalAlignment = Alignment.Top) {
+                  Box(
+                      Modifier
+                          .padding(top = 8.dp)
+                          .size(6.dp)
+                          .background(dot, CircleShape)
+                  )
+                  Spacer(Modifier.width(12.dp))
+                  Text(text, style = TextStyle(
+                      fontSize = size.sp, lineHeight = line.sp, color = palette.textPrimary))
+              }
+          }
+
+          @Composable
+          fun NumberedItem(
+              number: Int, text: String, size: Float = 16f, line: Float = 24f,
+          ) {
+              Row(verticalAlignment = Alignment.Top) {
+                  Text(
+                      "$number",
+                      style = TextStyle(
+                          fontSize = 14.sp,
+                          fontFamily = FontFamily.Monospace,
+                          fontWeight = FontWeight.Medium,
+                          color = palette.textSecondary,
+                      ),
+                      modifier = Modifier.widthIn(min = 20.dp),
+                      textAlign = TextAlign.End,
+                  )
+                  Spacer(Modifier.width(12.dp))
+                  Text(text, style = TextStyle(
+                      fontSize = size.sp, lineHeight = line.sp, color = palette.textPrimary))
+              }
+          }
+
+          @Composable
+          fun CalloutSection(
+              title: String, icon: ImageVector, color: Color,
+              items: List<String>, size: Float = 16f, line: Float = 24f,
+          ) {
+              Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                  Box(Modifier.width(3.dp).fillMaxHeight().background(color))
+                  Spacer(Modifier.width(14.dp))
+                  Column {
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          Icon(icon, contentDescription = null, tint = color,
+                              modifier = Modifier.size(16.dp))
+                          Spacer(Modifier.width(6.dp))
+                          Text(title, style = TextStyle(
+                              fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                              color = palette.textPrimary))
+                      }
+                      Spacer(Modifier.height(12.dp))
+                      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                          items.forEach { BulletItem(it, color, size, line) }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun ThinBar(fraction: Float, modifier: Modifier = Modifier) {
+              val p = palette
+              Box(modifier.fillMaxWidth().height(4.dp)
+                  .background(p.divider, RoundedCornerShape(2.dp))) {
+                  Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f))
+                      .fillMaxHeight().background(p.accent, RoundedCornerShape(2.dp)))
+              }
+          }
+
+          @Composable
+          fun StatBlock(value: String, label: String, modifier: Modifier = Modifier) {
+              val p = palette
+              Column(modifier) {
+                  Text(value, style = TextStyle(
+                      fontSize = 22.sp, fontFamily = FontFamily.Monospace,
+                      fontWeight = FontWeight.Medium, color = p.textPrimary))
+                  Text(label, style = TextStyle(fontSize = 12.sp, color = p.textSecondary))
+              }
+          }
+          EOF_COMPONENTS
+
+          cat > app/src/main/java/com/sitebook/app/HomeView.kt <<'EOF_HOME'
+          package com.sitebook.app
+
+          import androidx.activity.compose.BackHandler
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Box
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.PaddingValues
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.Spacer
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.height
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.layout.size
+          import androidx.compose.foundation.layout.width
+          import androidx.compose.foundation.layout.widthIn
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.lazy.itemsIndexed
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.BorderStroke
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.ArrowDropDown
+          import androidx.compose.material.icons.filled.ArrowForward
+          import androidx.compose.material.icons.filled.Check
+          import androidx.compose.material.icons.filled.MoreVert
+          import androidx.compose.material.icons.filled.Star
+          import androidx.compose.material3.DropdownMenu
+          import androidx.compose.material3.DropdownMenuItem
+          import androidx.compose.material3.ExperimentalMaterial3Api
+          import androidx.compose.material3.Icon
+          import androidx.compose.material3.IconButton
+          import androidx.compose.material3.OutlinedTextField
+          import androidx.compose.material3.OutlinedTextFieldDefaults
+          import androidx.compose.material3.Scaffold
+          import androidx.compose.material3.Surface
+          import androidx.compose.material3.Text
+          import androidx.compose.material3.TextButton
+          import androidx.compose.material3.TopAppBar
+          import androidx.compose.material3.TopAppBarDefaults
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.getValue
+          import androidx.compose.runtime.mutableStateOf
+          import androidx.compose.runtime.remember
+          import androidx.compose.runtime.setValue
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          sealed class Route {
+              object Home : Route()
+              data class Reader(val topicId: Int) : Route()
+              object Menu : Route()
+              object Progress : Route()
+              object Notes : Route()
+          }
+
+          @Composable
+          fun HomeView(store: Store) {
+              var route by remember { mutableStateOf<Route>(Route.Home) }
+              when (val r = route) {
+                  is Route.Home -> HomeScreen(store,
+                      onOpenTopic = { route = Route.Reader(it) },
+                      onMenu = { route = Route.Menu })
+                  is Route.Reader -> {
+                      BackHandler { route = Route.Home }
+                      ReaderScreen(store, r.topicId, onBack = { route = Route.Home })
+                  }
+                  is Route.Menu -> {
+                      BackHandler { route = Route.Home }
+                      MenuScreen(
+                          onProgress = { route = Route.Progress },
+                          onNotes = { route = Route.Notes },
+                          onBack = { route = Route.Home })
+                  }
+                  is Route.Progress -> {
+                      BackHandler { route = Route.Menu }
+                      ProgressScreen(store, onBack = { route = Route.Menu })
+                  }
+                  is Route.Notes -> {
+                      BackHandler { route = Route.Menu }
+                      NotesScreen(store,
+                          onOpenTopic = { route = Route.Reader(it) },
+                          onBack = { route = Route.Menu })
+                  }
+              }
+          }
+
+          @OptIn(ExperimentalMaterial3Api::class)
+          @Composable
+          fun HomeScreen(store: Store, onOpenTopic: (Int) -> Unit, onMenu: () -> Unit) {
+              val p = palette
+              var query by remember { mutableStateOf("") }
+              var phaseFilter by remember { mutableStateOf<String?>(null) }
+              var onlyFav by remember { mutableStateOf(false) }
+              var phaseMenu by remember { mutableStateOf(false) }
+
+              val filtered = store.topics.filter { t ->
+                  (phaseFilter == null || t.phase == phaseFilter) &&
+                      (!onlyFav || t.id in store.favs) &&
+                      (query.isEmpty() || t.haystack.contains(query.lowercase()))
+              }
+
+              Scaffold(
+                  topBar = {
+                      TopAppBar(
+                          title = { Text("SiteBook", fontWeight = FontWeight.SemiBold) },
+                          actions = {
+                              IconButton(onClick = onMenu) {
+                                  Icon(Icons.Default.MoreVert, contentDescription = "Menu",
+                                      tint = p.textPrimary)
+                              }
+                          },
+                          colors = TopAppBarDefaults.topAppBarColors(
+                              containerColor = p.bg, titleContentColor = p.textPrimary)
+                      )
+                  },
+                  containerColor = p.bg,
+              ) { padding ->
+                  LazyColumn(
+                      modifier = Modifier.padding(padding).fillMaxSize(),
+                      contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+                      verticalArrangement = Arrangement.spacedBy(28.dp),
+                  ) {
+                      store.loadError?.let { err ->
+                          item { ErrorCard(err) { store.reload() } }
+                      }
+                      store.continueTopic?.let { t ->
+                          item {
+                              ContinueCard(t, done = t.id in store.done,
+                                  onClick = { onOpenTopic(t.id) })
+                          }
+                      }
+                      item {
+                          Column {
+                              SectionHeader("Overview")
+                              Row {
+                                  StatBlock("${store.topics.size}", "Topics",
+                                      Modifier.weight(1f))
+                                  StatBlock("${store.phases.size}", "Phases",
+                                      Modifier.weight(1f))
+                                  StatBlock("${store.done.size}", "Done",
+                                      Modifier.weight(1f))
+                              }
+                          }
+                      }
+                      item {
+                          Row(verticalAlignment = Alignment.CenterVertically,
+                              horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                              Box {
+                                  TextButton(onClick = { phaseMenu = true }) {
+                                      Text(phaseFilter ?: "All phases",
+                                          color = if (phaseFilter == null) p.textSecondary else p.accent)
+                                      Icon(Icons.Default.ArrowDropDown, contentDescription = null,
+                                          tint = if (phaseFilter == null) p.textSecondary else p.accent)
+                                  }
+                                  DropdownMenu(expanded = phaseMenu,
+                                      onDismissRequest = { phaseMenu = false }) {
+                                      DropdownMenuItem(text = { Text("All phases") },
+                                          onClick = { phaseFilter = null; phaseMenu = false })
+                                      store.phases.forEach { ph ->
+                                          DropdownMenuItem(text = { Text(ph) },
+                                              onClick = { phaseFilter = ph; phaseMenu = false })
+                                      }
+                                  }
+                              }
+                              TextButton(onClick = { onlyFav = !onlyFav }) {
+                                  Icon(Icons.Default.Star, contentDescription = null,
+                                      tint = if (onlyFav) p.accent else p.textSecondary)
+                                  Spacer(Modifier.width(4.dp))
+                                  Text("Favorites",
+                                      color = if (onlyFav) p.accent else p.textSecondary)
+                              }
+                              Spacer(Modifier.weight(1f))
+                          }
+                      }
+                      item {
+                          OutlinedTextField(
+                              value = query,
+                              onValueChange = { query = it },
+                              placeholder = { Text("Search / খুঁজুন") },
+                              singleLine = true,
+                              modifier = Modifier.fillMaxWidth(),
+                              colors = OutlinedTextFieldDefaults.colors(
+                                  focusedBorderColor = p.accent,
+                                  unfocusedBorderColor = p.divider,
+                                  focusedTextColor = p.textPrimary,
+                                  unfocusedTextColor = p.textPrimary,
+                              ),
+                          )
+                      }
+                      item { SectionHeader("Topics") }
+                      if (filtered.isEmpty()) {
+                          item {
+                              Text("No results / কিছু পাওয়া যায়নি",
+                                  color = p.textSecondary, modifier = Modifier.padding(vertical = 24.dp))
+                          }
+                      } else {
+                          itemsIndexed(filtered) { idx, t ->
+                              TopicRow(t, done = t.id in store.done,
+                                  fav = t.id in store.favs) { onOpenTopic(t.id) }
+                              if (idx < filtered.size - 1) Hairline()
+                          }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun ErrorCard(message: String, onRetry: () -> Unit) {
+              val p = palette
+              Column(
+                  Modifier.fillMaxWidth()
+                      .background(p.surface, RoundedCornerShape(8.dp))
+                      .padding(12.dp),
+                  verticalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                  Text("Data not loaded",
+                      style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                          color = p.warn))
+                  Text(message, style = TextStyle(fontSize = 12.sp, color = p.textSecondary))
+                  TextButton(onClick = onRetry) { Text("Retry", color = p.accent) }
+              }
+          }
+
+          @Composable
+          private fun ContinueCard(t: Topic, done: Boolean, onClick: () -> Unit) {
+              val p = palette
+              Surface(
+                  shape = RoundedCornerShape(10.dp),
+                  color = p.surface,
+                  border = BorderStroke(1.dp, p.divider),
+                  modifier = Modifier.fillMaxWidth().clickable { onClick() },
+              ) {
+                  Column(Modifier.padding(16.dp),
+                      verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                      Text("CONTINUE", style = TextStyle(
+                          fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                          letterSpacing = 0.5.sp, color = p.textSecondary))
+                      Text(t.en, style = TextStyle(
+                          fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary))
+                      Text(t.bn, style = TextStyle(fontSize = 15.sp, color = p.textSecondary))
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          Box(Modifier.size(5.dp).background(p.accent, CircleShape))
+                          Spacer(Modifier.width(6.dp))
+                          Text(t.phase ?: "—", style = TextStyle(fontSize = 12.sp, color = p.accent))
+                      }
+                      Spacer(Modifier.height(4.dp))
+                      Hairline()
+                      Spacer(Modifier.height(4.dp))
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          Text(if (done) "Review" else "Continue",
+                              style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                  color = p.accent))
+                          Spacer(Modifier.weight(1f))
+                          Icon(Icons.Default.ArrowForward, contentDescription = null,
+                              tint = p.accent, modifier = Modifier.size(18.dp))
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun TopicRow(t: Topic, done: Boolean, fav: Boolean, onClick: () -> Unit) {
+              val p = palette
+              Row(
+                  modifier = Modifier.fillMaxWidth().clickable { onClick() }
+                      .padding(vertical = 12.dp),
+                  verticalAlignment = Alignment.Top,
+              ) {
+                  Text("${t.id}",
+                      style = TextStyle(fontSize = 14.sp, fontFamily = FontFamily.Monospace,
+                          fontWeight = FontWeight.Medium, color = p.textSecondary),
+                      modifier = Modifier.widthIn(min = 28.dp).padding(top = 2.dp))
+                  Spacer(Modifier.width(12.dp))
+                  Column(Modifier.weight(1f)) {
+                      Text(t.en, style = TextStyle(
+                          fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary))
+                      Text(t.bn, style = TextStyle(fontSize = 15.sp, color = p.textSecondary))
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          Box(Modifier.size(4.dp).background(p.accent, CircleShape))
+                          Spacer(Modifier.width(6.dp))
+                          Text(t.phase ?: "—", style = TextStyle(fontSize = 12.sp, color = p.accent))
+                      }
+                  }
+                  if (done) {
+                      Icon(Icons.Default.Check, contentDescription = "Done",
+                          tint = p.success, modifier = Modifier.size(18.dp))
+                  }
+                  if (fav) {
+                      Icon(Icons.Default.Star, contentDescription = "Favorite",
+                          tint = p.accent, modifier = Modifier.size(18.dp))
+                  }
+              }
+          }
+          EOF_HOME
+
+          cat > app/src/main/java/com/sitebook/app/ReaderView.kt <<'EOF_READER'
+          package com.sitebook.app
+
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Box
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.IntrinsicSize
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.Spacer
+          import androidx.compose.foundation.layout.fillMaxHeight
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.height
+          import androidx.compose.foundation.layout.heightIn
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.layout.size
+          import androidx.compose.foundation.layout.width
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.ArrowBack
+          import androidx.compose.material.icons.filled.Check
+          import androidx.compose.material.icons.filled.CheckCircle
+          import androidx.compose.material.icons.filled.ChevronLeft
+          import androidx.compose.material.icons.filled.ChevronRight
+          import androidx.compose.material.icons.filled.MoreVert
+          import androidx.compose.material.icons.filled.Warning
+          import androidx.compose.material3.DropdownMenu
+          import androidx.compose.material3.DropdownMenuItem
+          import androidx.compose.material3.ExperimentalMaterial3Api
+          import androidx.compose.material3.Icon
+          import androidx.compose.material3.IconButton
+          import androidx.compose.material3.OutlinedTextField
+          import androidx.compose.material3.OutlinedTextFieldDefaults
+          import androidx.compose.material3.Scaffold
+          import androidx.compose.material3.Text
+          import androidx.compose.material3.TextButton
+          import androidx.compose.material3.TopAppBar
+          import androidx.compose.material3.TopAppBarDefaults
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.DisposableEffect
+          import androidx.compose.runtime.LaunchedEffect
+          import androidx.compose.runtime.getValue
+          import androidx.compose.runtime.mutableStateOf
+          import androidx.compose.runtime.remember
+          import androidx.compose.runtime.setValue
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          @OptIn(ExperimentalMaterial3Api::class)
+          @Composable
+          fun ReaderScreen(store: Store, startId: Int, onBack: () -> Unit) {
+              val p = palette
+              var cur by remember { mutableStateOf(startId) }
+              var showFont by remember { mutableStateOf(false) }
+              var menuOpen by remember { mutableStateOf(false) }
+
+              val index = store.topics.indexOfFirst { it.id == cur }
+              val t = store.topics.getOrNull(index)
+
+              LaunchedEffect(cur) {
+                  store.lastReadId = cur
+                  store.persist()
+              }
+              DisposableEffect(cur) {
+                  onDispose { store.flushNotes() }
+              }
+
+              if (t == null) {
+                  Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                      Text("Topic not found", color = p.textSecondary)
+                  }
+                  return
+              }
+
+              val (bodySize, bodyLine) = when (store.fontSizeIndex) {
+                  0 -> 15f to 22f
+                  1 -> 16f to 24f
+                  2 -> 17f to 26f
+                  3 -> 19f to 30f
+                  else -> 21f to 32f
+              }
+
+              Scaffold(
+                  topBar = {
+                      TopAppBar(
+                          title = {
+                              Text("$cur / ${store.topics.size}", style = TextStyle(
+                                  fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                                  color = p.textSecondary))
+                          },
+                          navigationIcon = {
+                              IconButton(onClick = onBack) {
+                                  Icon(Icons.Default.ArrowBack, contentDescription = "Back",
+                                      tint = p.textPrimary)
+                              }
+                          },
+                          actions = {
+                              Box {
+                                  IconButton(onClick = { menuOpen = true }) {
+                                      Icon(Icons.Default.MoreVert, contentDescription = "More",
+                                          tint = p.textPrimary)
+                                  }
+                                  DropdownMenu(expanded = menuOpen,
+                                      onDismissRequest = { menuOpen = false }) {
+                                      DropdownMenuItem(
+                                          text = { Text(if (cur in store.favs)
+                                              "Remove favorite" else "Add to favorites") },
+                                          onClick = { menuOpen = false; store.toggleFav(cur) })
+                                      DropdownMenuItem(
+                                          text = { Text("Text size") },
+                                          onClick = { menuOpen = false; showFont = true })
+                                  }
+                              }
+                          },
+                          colors = TopAppBarDefaults.topAppBarColors(
+                              containerColor = p.bg, titleContentColor = p.textSecondary),
+                      )
+                  },
+                  bottomBar = {
+                      Row(
+                          Modifier.fillMaxWidth().background(p.surface)
+                              .padding(horizontal = 20.dp, vertical = 12.dp),
+                          verticalAlignment = Alignment.CenterVertically,
+                      ) {
+                          TextButton(onClick = { store.toggleDone(cur) }) {
+                              Icon(
+                                  if (cur in store.done) Icons.Default.CheckCircle
+                                  else Icons.Default.CheckCircle,
+                                  contentDescription = null,
+                                  tint = if (cur in store.done) p.success else p.textSecondary,
+                              )
+                              Spacer(Modifier.width(6.dp))
+                              Text(if (cur in store.done) "Done" else "Mark done",
+                                  color = if (cur in store.done) p.success else p.accent,
+                                  fontWeight = FontWeight.SemiBold)
+                          }
+                          Spacer(Modifier.weight(1f))
+                          IconButton(
+                              onClick = {
+                                  if (index > 0) {
+                                      store.flushNotes()
+                                      cur = store.topics[index - 1].id
+                                  }
+                              },
+                              enabled = index > 0,
+                          ) {
+                              Icon(Icons.Default.ChevronLeft, contentDescription = "Previous",
+                                  tint = if (index > 0) p.accent else p.textSecondary)
+                          }
+                          Text("${index + 1} / ${store.topics.size}", style = TextStyle(
+                              fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                              color = p.textSecondary))
+                          IconButton(
+                              onClick = {
+                                  if (index < store.topics.size - 1) {
+                                      store.flushNotes()
+                                      cur = store.topics[index + 1].id
+                                  }
+                              },
+                              enabled = index < store.topics.size - 1,
+                          ) {
+                              Icon(Icons.Default.ChevronRight, contentDescription = "Next",
+                                  tint = if (index < store.topics.size - 1) p.accent
+                                  else p.textSecondary)
+                          }
+                      }
+                  },
+                  containerColor = p.bg,
+              ) { padding ->
+                  Column(
+                      modifier = Modifier.padding(padding).fillMaxSize()
+                          .verticalScroll(rememberScrollState())
+                          .padding(horizontal = 20.dp, vertical = 20.dp),
+                      verticalArrangement = Arrangement.spacedBy(28.dp),
+                  ) {
+                      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                          t.phase?.let { ph ->
+                              Row(verticalAlignment = Alignment.CenterVertically) {
+                                  Box(Modifier.size(5.dp).background(p.accent, CircleShape))
+                                  Spacer(Modifier.width(6.dp))
+                                  Text(ph, style = TextStyle(
+                                      fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                      letterSpacing = 0.4.sp, color = p.textSecondary))
+                              }
+                          }
+                          Text(t.en, style = TextStyle(
+                              fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                              color = p.textPrimary))
+                          Text(t.bn, style = TextStyle(
+                              fontSize = 20.sp, lineHeight = 28.sp, color = p.textSecondary))
+                          Spacer(Modifier.height(6.dp))
+                          Hairline()
+                      }
+
+                      t.what?.takeIf { it.isNotBlank() }?.let { what ->
+                          Text(what, style = TextStyle(
+                              fontSize = bodySize.sp, lineHeight = bodyLine.sp,
+                              color = p.textPrimary))
+                      }
+
+                      t.why?.takeIf { it.isNotBlank() }?.let { why ->
+                          Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                              Box(Modifier.width(3.dp).fillMaxHeight().background(p.warn))
+                              Spacer(Modifier.width(14.dp))
+                              Column {
+                                  SectionHeader("কেন করা হয়?")
+                                  Text(why, style = TextStyle(
+                                      fontSize = bodySize.sp, lineHeight = bodyLine.sp,
+                                      color = p.textPrimary))
+                              }
+                          }
+                      }
+
+                      t.uses?.takeIf { it.isNotBlank() }?.let { uses ->
+                          Column {
+                              SectionHeader("ব্যবহার")
+                              Text(uses, style = TextStyle(
+                                  fontSize = bodySize.sp, lineHeight = bodyLine.sp,
+                                  color = p.textPrimary))
+                          }
+                      }
+
+                      t.steps?.takeIf { it.isNotEmpty() }?.let { steps ->
+                          Column {
+                              SectionHeader("ধাপসমূহ")
+                              Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                  steps.forEachIndexed { i, s ->
+                                      NumberedItem(i + 1, s, bodySize, bodyLine)
+                                  }
+                              }
+                          }
+                      }
+
+                      t.ways?.takeIf { it.isNotEmpty() }?.let { ways ->
+                          Column {
+                              SectionHeader("পদ্ধতি")
+                              Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                  ways.forEach { BulletItem(it, p.accent, bodySize, bodyLine) }
+                              }
+                          }
+                      }
+
+                      t.examples?.takeIf { it.isNotEmpty() }?.let { examples ->
+                          Column {
+                              SectionHeader("উদাহরণ")
+                              Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                  examples.forEachIndexed { i, s ->
+                                      NumberedItem(i + 1, s, bodySize, bodyLine)
+                                  }
+                              }
+                          }
+                      }
+
+                      t.mistakes?.takeIf { it.isNotEmpty() }?.let { items ->
+                          CalloutSection("সাধারণ ভুল", Icons.Default.Warning, p.warn,
+                              items, bodySize, bodyLine)
+                      }
+
+                      t.risks?.takeIf { it.isNotEmpty() }?.let { items ->
+                          CalloutSection("ঝুঁকি", Icons.Default.Warning, p.risk,
+                              items, bodySize, bodyLine)
+                      }
+
+                      t.tips?.takeIf { it.isNotEmpty() }?.let { items ->
+                          Column {
+                              SectionHeader("টিপস")
+                              Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                  items.forEach { BulletItem(it, p.accent, bodySize, bodyLine) }
+                              }
+                          }
+                      }
+
+                      t.checklist?.takeIf { it.isNotEmpty() }?.let { items ->
+                          Column {
+                              SectionHeader("চেকলিস্ট")
+                              Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                  items.forEachIndexed { i, item ->
+                                      val c = store.isChecked(t.id, i)
+                                      Row(
+                                          Modifier.fillMaxWidth()
+                                              .clickable { store.toggleChecked(t.id, i) },
+                                          verticalAlignment = Alignment.Top,
+                                      ) {
+                                          Text(if (c) "☑" else "☐", style = TextStyle(
+                                              fontSize = 18.sp,
+                                              color = if (c) p.success else p.textSecondary))
+                                          Spacer(Modifier.width(10.dp))
+                                          Text(item, style = TextStyle(
+                                              fontSize = bodySize.sp, lineHeight = bodyLine.sp,
+                                              color = p.textPrimary))
+                                      }
+                                  }
+                              }
+                          }
+                      }
+
+                      t.sources?.takeIf { it.isNotEmpty() }?.let { sources ->
+                          Column {
+                              SectionHeader("সোর্স")
+                              sources.forEach {
+                                  Text(it, style = TextStyle(
+                                      fontSize = 13.sp, color = p.textSecondary),
+                                      modifier = Modifier.padding(vertical = 4.dp))
+                              }
+                          }
+                      }
+
+                      Column {
+                          SectionHeader("আমার নোট")
+                          OutlinedTextField(
+                              value = store.notes[cur] ?: "",
+                              onValueChange = { store.setNote(cur, it) },
+                              modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp),
+                              textStyle = TextStyle(fontSize = 16.sp, color = p.textPrimary),
+                              colors = OutlinedTextFieldDefaults.colors(
+                                  focusedBorderColor = p.divider,
+                                  unfocusedBorderColor = p.divider,
+                                  focusedContainerColor = p.surface,
+                                  unfocusedContainerColor = p.surface,
+                              ),
+                          )
+                      }
+
+                      Spacer(Modifier.height(24.dp))
+                  }
+              }
+
+              if (showFont) {
+                  FontSheet(store.fontSizeIndex) { idx ->
+                      store.fontSizeIndex = idx
+                      store.persist()
+                      showFont = false
+                  }
+              }
+          }
+          EOF_READER
+
+          cat > app/src/main/java/com/sitebook/app/ProgressScreen.kt <<'EOF_PROGRESS'
+          package com.sitebook.app
+
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.Spacer
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.layout.size
+          import androidx.compose.foundation.layout.width
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.ArrowBack
+          import androidx.compose.material.icons.filled.Warning
+          import androidx.compose.material3.ExperimentalMaterial3Api
+          import androidx.compose.material3.Icon
+          import androidx.compose.material3.IconButton
+          import androidx.compose.material3.Scaffold
+          import androidx.compose.material3.Text
+          import androidx.compose.material3.TopAppBar
+          import androidx.compose.material3.TopAppBarDefaults
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.text.font.FontFamily
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          @OptIn(ExperimentalMaterial3Api::class)
+          @Composable
+          fun ProgressScreen(store: Store, onBack: () -> Unit) {
+              val p = palette
+              Scaffold(
+                  topBar = {
+                      TopAppBar(
+                          title = { Text("Progress", color = p.textPrimary) },
+                          navigationIcon = {
+                              IconButton(onClick = onBack) {
+                                  Icon(Icons.Default.ArrowBack, contentDescription = "Back",
+                                      tint = p.textPrimary)
+                              }
+                          },
+                          colors = TopAppBarDefaults.topAppBarColors(
+                              containerColor = p.bg, titleContentColor = p.textPrimary),
+                      )
+                  },
+                  containerColor = p.bg,
+              ) { padding ->
+                  Column(
+                      Modifier.padding(padding).fillMaxSize()
+                          .verticalScroll(rememberScrollState()).padding(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(32.dp),
+                  ) {
+                      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                          SectionHeader("Overall")
+                          Row(verticalAlignment = Alignment.Bottom) {
+                              Text("${store.done.size}", style = TextStyle(
+                                  fontSize = 34.sp, fontFamily = FontFamily.Monospace,
+                                  fontWeight = FontWeight.Medium, color = p.textPrimary))
+                              Spacer(Modifier.width(6.dp))
+                              Text("/ ${store.topics.size}", style = TextStyle(
+                                  fontSize = 18.sp, fontFamily = FontFamily.Monospace,
+                                  color = p.textSecondary))
+                          }
+                          val fraction = if (store.topics.isEmpty()) 0f
+                              else store.done.size.toFloat() / store.topics.size
+                          Text("${(fraction * 100).toInt()}% complete",
+                              style = TextStyle(fontSize = 12.sp, color = p.textSecondary))
+                          ThinBar(fraction)
+                      }
+                      Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                          SectionHeader("By phase")
+                          store.phases.forEach { ph ->
+                              val total = store.topics.count { it.phase == ph }
+                              val done = store.topics.count {
+                                  it.phase == ph && it.id in store.done
+                              }
+                              val f = if (total == 0) 0f else done.toFloat() / total
+                              Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                  Row(verticalAlignment = Alignment.CenterVertically) {
+                                      Text(ph, style = TextStyle(
+                                          fontSize = 14.sp, color = p.textPrimary))
+                                      Spacer(Modifier.weight(1f))
+                                      Text("$done / $total", style = TextStyle(
+                                          fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                                          color = p.textSecondary))
+                                  }
+                                  ThinBar(f)
+                              }
+                          }
+                      }
+                      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                          SectionHeader("Needs attention")
+                          val withMist = store.topics.count { !it.mistakes.isNullOrEmpty() }
+                          val withRisk = store.topics.count { !it.risks.isNullOrEmpty() }
+                          Row(verticalAlignment = Alignment.CenterVertically) {
+                              Icon(Icons.Default.Warning, contentDescription = null,
+                                  tint = p.warn, modifier = Modifier.size(16.dp))
+                              Spacer(Modifier.width(8.dp))
+                              Text("$withMist topics contain common mistakes",
+                                  style = TextStyle(fontSize = 14.sp, color = p.textPrimary))
+                          }
+                          Row(verticalAlignment = Alignment.CenterVertically) {
+                              Icon(Icons.Default.Warning, contentDescription = null,
+                                  tint = p.risk, modifier = Modifier.size(16.dp))
+                              Spacer(Modifier.width(8.dp))
+                              Text("$withRisk topics contain open risks",
+                                  style = TextStyle(fontSize = 14.sp, color = p.textPrimary))
+                          }
+                      }
+                  }
+              }
+          }
+          EOF_PROGRESS
+
+          cat > app/src/main/java/com/sitebook/app/NotesScreen.kt <<'EOF_NOTES'
+          package com.sitebook.app
+
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.ArrowBack
+          import androidx.compose.material3.ExperimentalMaterial3Api
+          import androidx.compose.material3.Icon
+          import androidx.compose.material3.IconButton
+          import androidx.compose.material3.Scaffold
+          import androidx.compose.material3.Text
+          import androidx.compose.material3.TopAppBar
+          import androidx.compose.material3.TopAppBarDefaults
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextOverflow
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          @OptIn(ExperimentalMaterial3Api::class)
+          @Composable
+          fun NotesScreen(store: Store, onOpenTopic: (Int) -> Unit, onBack: () -> Unit) {
+              val p = palette
+              Scaffold(
+                  topBar = {
+                      TopAppBar(
+                          title = { Text("Notes", color = p.textPrimary) },
+                          navigationIcon = {
+                              IconButton(onClick = onBack) {
+                                  Icon(Icons.Default.ArrowBack, contentDescription = "Back",
+                                      tint = p.textPrimary)
+                              }
+                          },
+                          colors = TopAppBarDefaults.topAppBarColors(
+                              containerColor = p.bg, titleContentColor = p.textPrimary),
+                      )
+                  },
+                  containerColor = p.bg,
+              ) { padding ->
+                  Column(Modifier.padding(padding).fillMaxSize()) {
+                      if (store.notesSorted.isEmpty()) {
+                          Text("No notes yet. Open any topic and write one.",
+                              style = TextStyle(fontSize = 15.sp, color = p.textSecondary),
+                              modifier = Modifier.padding(20.dp))
+                      } else {
+                          store.notesSorted.forEachIndexed { idx, t ->
+                              Column(
+                                  Modifier.fillMaxWidth()
+                                      .clickable { onOpenTopic(t.id) }
+                                      .padding(horizontal = 20.dp, vertical = 14.dp),
+                              ) {
+                                  Text("${t.id} · ${t.en}", style = TextStyle(
+                                      fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                      color = p.textPrimary))
+                                  Text(store.notes[t.id] ?: "", style = TextStyle(
+                                      fontSize = 13.sp, color = p.textSecondary),
+                                      maxLines = 2, overflow = TextOverflow.Ellipsis)
+                              }
+                              if (idx < store.notesSorted.size - 1) {
+                                  Hairline(Modifier.padding(horizontal = 20.dp))
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF_NOTES
+
+          cat > app/src/main/java/com/sitebook/app/MenuSheet.kt <<'EOF_MENU'
+          package com.sitebook.app
+
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.Spacer
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.layout.width
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.ArrowBack
+          import androidx.compose.material.icons.filled.Edit
+          import androidx.compose.material.icons.filled.Info
+          import androidx.compose.material3.ExperimentalMaterial3Api
+          import androidx.compose.material3.Icon
+          import androidx.compose.material3.IconButton
+          import androidx.compose.material3.Scaffold
+          import androidx.compose.material3.Text
+          import androidx.compose.material3.TopAppBar
+          import androidx.compose.material3.TopAppBarDefaults
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          @OptIn(ExperimentalMaterial3Api::class)
+          @Composable
+          fun MenuScreen(onProgress: () -> Unit, onNotes: () -> Unit, onBack: () -> Unit) {
+              val p = palette
+              Scaffold(
+                  topBar = {
+                      TopAppBar(
+                          title = { Text("More", color = p.textPrimary) },
+                          navigationIcon = {
+                              IconButton(onClick = onBack) {
+                                  Icon(Icons.Default.ArrowBack, contentDescription = "Back",
+                                      tint = p.textPrimary)
+                              }
+                          },
+                          colors = TopAppBarDefaults.topAppBarColors(
+                              containerColor = p.bg, titleContentColor = p.textPrimary),
+                      )
+                  },
+                  containerColor = p.bg,
+              ) { padding ->
+                  Column(Modifier.padding(padding).fillMaxSize()) {
+                      MenuRow("Progress", { onProgress() }, {
+                          Icon(Icons.Default.Info, contentDescription = null, tint = p.accent)
+                      })
+                      Hairline()
+                      MenuRow("Notes", { onNotes() }, {
+                          Icon(Icons.Default.Edit, contentDescription = null, tint = p.accent)
+                      })
+                  }
+              }
+          }
+
+          @Composable
+          private fun MenuRow(label: String, onClick: () -> Unit,
+                              icon: @Composable () -> Unit) {
+              val p = palette
+              Row(
+                  Modifier.fillMaxWidth().clickable { onClick() }
+                      .padding(horizontal = 20.dp, vertical = 16.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+              ) {
+                  icon()
+                  Spacer(Modifier.width(16.dp))
+                  Text(label, style = TextStyle(fontSize = 16.sp, color = p.textPrimary))
+              }
+          }
+          EOF_MENU
+
+          cat > app/src/main/java/com/sitebook/app/FontSheet.kt <<'EOF_FONT'
+          package com.sitebook.app
+
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.Spacer
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.Check
+          import androidx.compose.material3.AlertDialog
+          import androidx.compose.material3.Icon
+          import androidx.compose.material3.Text
+          import androidx.compose.material3.TextButton
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          @Composable
+          fun FontSheet(current: Int, onSelect: (Int) -> Unit) {
+              val p = palette
+              val labels = listOf("Small", "Medium", "Default", "Large", "X-Large")
+              AlertDialog(
+                  onDismissRequest = { onSelect(current) },
+                  title = { Text("Text size") },
+                  text = {
+                      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                          labels.forEachIndexed { i, label ->
+                              Row(
+                                  Modifier.fillMaxWidth()
+                                      .clickable { onSelect(i) }
+                                      .padding(vertical = 10.dp),
+                                  verticalAlignment = Alignment.CenterVertically,
+                              ) {
+                                  Text(label, style = TextStyle(
+                                      fontSize = 15.sp, color = p.textPrimary))
+                                  Spacer(Modifier.weight(1f))
+                                  if (i == current) {
+                                      Icon(Icons.Default.Check, contentDescription = null,
+                                          tint = p.accent)
+                                  }
+                              }
+                          }
+                      }
+                  },
+                  confirmButton = {
+                      TextButton(onClick = { onSelect(current) }) {
+                          Text("Done", color = p.accent)
+                      }
+                  },
+              )
+          }
+          EOF_FONT
+
+          cat > app/src/main/java/com/sitebook/app/MainActivity.kt <<'EOF_MAIN'
+          package com.sitebook.app
+
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val store = Store(applicationContext)
+                  setContent {
+                      SiteBookTheme {
+                          HomeView(store)
+                      }
+                  }
+              }
+          }
+          EOF_MAIN
+          echo "Kotlin sources written."
+
+      - name: Write topics.json
+        run: |
+          set -euo pipefail
+          cat > app/src/main/assets/topics.json <<'EOF_JSON'
+          [
+          {"id":1,"en":"Site Survey & Soil Test","bn":"সাইট সার্ভে ও মাটি পরীক্ষা","phase":"১. জরিপ","what":"নির্মাণের আগে সাইটের মাটি, ভূগর্ভস্থ পানি ও আশপাশের অবস্থা পরীক্ষা। বোরহোল, SPT ও ল্যাব টেস্ট দিয়ে ভিত্তি ডিজাইনের তথ্য পাওয়া যায়।","why":"ভুল ফাউন্ডেশন ডিজাইনে ভবন অসম বসে যায়, ফাটল ধরে, ভূমিকম্পে ধস নামে।","steps":["২–৩টি বোরহোল ড্রিল","প্রতি ১.৫ মিটারে SPT","নমুনা সংগ্রহ করে ল্যাব টেস্ট","ভূগর্ভস্থ পানির লেভেল রেকর্ড","সয়েল রিপোর্ট তৈরি"],"mistakes":["প্রয়োজনের কম বোরহোল","পানির লেভেল রেকর্ড না করা","আশপাশের ভবনের ডিজাইন না দেখা"],"tips":["বর্ষার শেষে ও শুষ্ক মৌসুমে পানির লেভেল আলাদা","পাশের প্লটের বোরলগ থাকলে তুলনা করুন"],"checklist":["বোরহোল প্ল্যানে","SPT রেকর্ড","ল্যাব রিপোর্ট","ইঞ্জিনিয়ার স্বাক্ষর"]},
+          {"id":2,"en":"Land Survey & Setout","bn":"ভূমি জরিপ ও সেটআউট","phase":"১. জরিপ","what":"দলিল-খতিয়ানের সাথে মিলিয়ে জমি মাপা, সীমানা নির্ধারণ এবং গ্রিড ও লেভেল চিহ্নিত করা।","why":"ভুল সেটআউটে ভবন পাশের প্লটে ঢুকে যায়, ড্রেনেজ উল্টো দিকে বইতে পারে।","steps":["ক্ষেত্রফল মিলান","Total Station দিয়ে কর্নার কোঅর্ডিনেট","স্থায়ী বেঞ্চমার্ক","গ্রিড ও লেভেল চিহ্নিত","কংক্রিট পেগে স্থায়ী"],"mistakes":["শুধু খতিয়ানের মাপে বিশ্বাস","কন্ট্রোল পয়েন্ট ছাড়া Total Station","সীমানা যাচাই না করা"],"tips":["বেঞ্চমার্ক সাইটের বাইরে রাখুন","বাউন্ডারি পিলারের ছবি ও কোঅর্ডিনেট সংরক্ষণ"],"checklist":["ক্ষেত্রফল মিলানো","কর্নার কোঅর্ডিনেট","গ্রিড ও কনট্যুর","সার্ভেয়ার স্বাক্ষর"]},
+          {"id":3,"en":"Topographic Survey","bn":"টপোগ্রাফিক সার্ভে","phase":"১. জরিপ","what":"জমির উঁচু-নিচু, ঢাল, বিদ্যমান গাছ-বাড়ি-রাস্তা ও ড্রেনেজ পথ মেপে ম্যাপ তৈরি।","why":"ভুল টপো ম্যাপে ভবনের লেভেল ভুল হয়, বৃষ্টির পানি ঢুকে যায়, খননের পরিমাণ ভুল হয়।","steps":["পুরো সাইটে গ্রিড স্টেশন","Total Station বা DGPS দিয়ে পয়েন্ট","কনট্যুর ইন্টারভাল নির্ধারণ","বিদ্যমান বৈশিষ্ট্য (গাছ, খুঁটি, নালা)","CAD-এ ম্যাপ ও কনট্যুর আঁকা"],"mistakes":["শুধু কর্নার পয়েন্ট মাপা","কনট্যুর ইন্টারভাল বেশি রাখা","ড্রেনেজ পথ না দেখা"],"tips":["বৃষ্টির দিনে পানি জমার জায়গা লক্ষ্য করুন","খনন লেভেলের জন্য আলাদা কনট্যুর দেখান"],"checklist":["সব স্টেশন","কনট্যুর","ড্রেনেজ দিক","সার্ভেয়ার স্বাক্ষর"]},
+          {"id":4,"en":"Soil Report Reading","bn":"সয়েল রিপোর্ট পড়া","phase":"১. জরিপ","what":"সয়েল টেস্ট রিপোর্ট থেকে মাটির স্তর, SPT N-value, পানির লেভেল, সাইসমিক প্যারামিটার বুঝে ভিত্তির ধরন ঠিক করা।","why":"রিপোর্ট না পড়ে পুরনো ডিজাইন কপি করলে ভিত্তি ডিজাইন ভুল হয়।","steps":["বোরলগ দেখে মাটির স্তর","SPT N-value দিয়ে ভারবহন ক্ষমতা","ভূগর্ভস্থ পানির লেভেল","সাইসমিক সাইট ক্লাস","ভিত্তির প্রস্তাবিত গভীরতা"],"uses":["Foundation type decision","Pile length estimate","Bearing capacity","Waterproofing need"],"mistakes":["শুধু শেষ পৃষ্ঠা দেখা","পানির লেভেল উপেক্ষা","সাইসমিক প্যারামিটার না দেখা"],"tips":["স্ট্রাকচারাল ইঞ্জিনিয়ারের সাথে একসাথে পড়ুন","পাশের সাইটের রিপোর্টের সাথে তুলনা"],"checklist":["মাটির স্তর","SPT N-value","পানি লেভেল","সাইসমিক ক্লাস"]},
+          {"id":5,"en":"Ground Water & Dewatering","bn":"ভূগর্ভস্থ পানি ও ডিওয়াটারিং","phase":"১. জরিপ","what":"খননের সময় ভূগর্ভস্থ পানি সাইটে জমে কাজ আটকে দেয়; ডিওয়াটারিং পাম্প বা ওয়েলপয়েন্ট দিয়ে পানি সরানো।","why":"পানি না সরালে ফাউন্ডেশন ঢালাই ভুল হয়, মাটি নরম হয়ে ধসে পড়ে, পাশের ভবনে ফাটল ধরে।","steps":["পানির লেভেল মাপা","খননের গভীরতা ঠিক করা","পাম্প সাইজ নির্বাচন","ডিসচার্জ পয়েন্ট ঠিক করা","পাশের ভবনের সেটেলমেন্ট মনিটর"],"mistakes":["পাম্প ছোট ধরা","ডিসচার্জ পাশে ছাড়া","পাশের ভবনের সেটেলমেন্ট না দেখা"],"risks":["পাশের ভবনে ফাটল","খনন ধসে পড়া","ফাউন্ডেশন দুর্বল হওয়া"],"tips":["পাম্পের ব্যাকআপ রাখুন","বর্ষার আগে ঢালাই শেষ করুন"],"checklist":["লেভেল মাপা","পাম্প সাইজ","ডিসচার্জ প্ল্যান","সেটেলমেন্ট রিডিং"]},
+          {"id":6,"en":"Architectural Concept Design","bn":"আর্কিটেকচারাল কনসেপ্ট ডিজাইন","phase":"২. ডিজাইন","what":"ক্লায়েন্টের চাহিদা, সাইট ও বাজেট মিলিয়ে ভবনের প্রাথমিক ফর্ম, লেআউট, রুম প্ল্যান ও এলিভেশন ঠিক করা।","why":"কনসেপ্ট ভুল হলে পরের সব ধাপ ভুল হয়; পরে বদলানো ব্যয়বহুল।","steps":["Design Brief তৈরি","সাইট অ্যানালাইসিস","বাবল ডায়াগ্রাম","রুম লেআউট ও সিঁড়ি","ফর্ম ও এলিভেশন স্টাডি","ক্লায়েন্ট অনুমোদন"],"mistakes":["সেটব্যাক ও FAR না দেখা","সিঁড়ির হেডরুম কম","MEP শ্যাফটের জায়গা না রাখা"],"tips":["কনসেপ্টেই স্ট্রাকচারাল কলাম গ্রিড মিলিয়ে নিন","ওয়েট এরিয়া একসাথে রাখলে পাইপ খরচ কমে"],"checklist":["Brief স্বাক্ষরিত","FAR ও সেটব্যাক","সিঁড়ি ও লিফট","ক্লায়েন্ট অনুমোদন"]},
+          {"id":7,"en":"Structural Analysis Basics","bn":"স্ট্রাকচারাল অ্যানালাইসিস বেসিক","phase":"২. ডিজাইন","what":"ভবনের ওপর আসা লোড কীভাবে স্ল্যাব→বিম→কলাম→ফাউন্ডেশনে নামে, তা হিসাব করা (frame analysis, STAAD/ETABS)।","why":"ভুল অ্যানালাইসিসে বিম-কলামের শক্তি কম হয়, ডিফ্লেকশন বেশি হয়, ভবন বিপজ্জনক হয়।","steps":["ফ্রেম মডেল তৈরি","সাপোর্ট ঠিক করা","লোড কেস (ডেড, লাইভ, উইন্ড, সাইসমিক)","কম্বিনেশন তৈরি","শিয়ার ফোর্স ও বেন্ডিং মোমেন্ট ডায়াগ্রাম","ডিজাইন কোডে যাচাই"],"uses":["ETABS","STAAD Pro","SAP2000","Manual frame method"],"mistakes":["সাপোর্ট ভুল (fixed/roller)","লোড কম ধরা","কম্বিনেশন বাদ দেওয়া"],"tips":["ফলাফল হাতে যাচাই করুন","ছোট ভবনে সরল পদ্ধতিও ব্যবহার করা যায়"],"checklist":["মডেল","লোড কেস","কম্বিনেশন","ডায়াগ্রাম"]},
+          {"id":8,"en":"Load Calculation","bn":"লোড ক্যালকুলেশন","phase":"২. ডিজাইন","what":"ডেড (নিজস্ব ওজন), লাইভ (মানুষ/আসবাব), উইন্ড ও সাইসমিক লোড BNBC অনুযায়ী হিসাব।","why":"লোড কম ধরা হলে কাঠামো দুর্বল হয়; বেশি ধরা হলে অপ্রয়োজনীয় খরচ।","steps":["ডেড লোড (স্ল্যাব, ফিনিশ, পার্টিশন)","লাইভ লোড BNBC টেবিল থেকে","উইন্ড লোড (ভবনের উচ্চতা ও এক্সপোজার)","সাইসমিক লোড (জোন ও সাইট ক্লাস)","লোড কম্বিনেশন"],"mistakes":["পার্টিশন লোড বাদ দেওয়া","ভবিষ্যৎ লোড (AC) না ধরা","জোন ভুল ধরা"],"tips":["সবসময় সর্বশেষ BNBC দেখুন","ভবিষ্যৎ সম্প্রসারণের জন্য রিজার্ভ রাখুন"],"checklist":["ডেড লোড","লাইভ লোড","উইন্ড","সাইসমিক","কম্বিনেশন"]},
+          {"id":9,"en":"Foundation Selection","bn":"ফাউন্ডেশন নির্বাচন","phase":"২. ডিজাইন","what":"সয়েল রিপোর্ট ও লোড অনুযায়ী ফুটিং, রাফট বা পাইল ফাউন্ডেশনের মধ্যে সঠিকটি বাছাই।","why":"ভুল ধরনের ভিত্তিতে বসে যাওয়া, ফাটল, অসম সেটেলমেন্ট হয়।","steps":["ভারবহন ক্ষমতা ও সেটেলমেন্ট","লোড ও লেভেল","পানির লেভেল","সাইটের সীমাবদ্ধতা","ফাউন্ডেশন টাইপ নির্বাচন","ইঞ্জিনিয়ার স্বাক্ষর"],"uses":["Shallow (footing/raft)","Deep (pile)","Raft for weak soil","Pile for soft strata"],"mistakes":["সয়েল রিপোর্ট না পড়ে সিদ্ধান্ত","সেটেলমেন্ট হিসাব না করা","পাশের ভবনের প্রভাব না দেখা"],"tips":["একাধিক বিকল্পের খরচ তুলনা করুন","পাইল হলে লোড টেস্ট করুন"],"checklist":["ভারবহন ক্ষমতা","লোড","পানি লেভেল","টাইপ নির্বাচন"]},
+          {"id":10,"en":"RCC Beam Design","bn":"আরসিসি বিম ডিজাইন","phase":"২. ডিজাইন","what":"বিম স্ল্যাবের লোড কলামে নামায়। বিমের সাইজ, রড, স্টিরাপ ও ডিটেইল BNBC অনুযায়ী নির্ধারণ।","why":"ভুল ডিজাইনে বিম ফেটে যায়, ডিফ্লেকশন বেশি হয়, ভূমিকম্পে ভঙ্গুর আচরণ করে।","steps":["স্প্যান ও লোড","বিমের সাইজ ধরা","মোমেন্ট ও শিয়ার হিসাব","রড ও স্টিরাপ","ল্যাপ ও ডিটেইল","স্বাক্ষর"],"mistakes":["শিয়ার রিইনফোর্সমেন্ট কম","স্টিরাপের স্পেসিং বেশি","ল্যাপ জোন ভুল জায়গায়"],"risks":["ডিফ্লেকশন","শিয়ার ফেইলিউর","ভঙ্গুর ধস"],"tips":["স্টিরাপ জয়েন্টের কাছে ঘন করুন","ডিটেইলিং ড্রয়িং আলাদা রাখুন"],"checklist":["সাইজ","টপ ও বটম রড","স্টিরাপ স্পেসিং","ল্যাপ ও কভার"]},
+          {"id":11,"en":"RCC Slab Design","bn":"আরসিসি স্ল্যাব ডিজাইন","phase":"২. ডিজাইন","what":"ওয়ান-ওয়ে বা টু-ওয়ে স্ল্যাবের পুরুত্ব, রড, ডিটেইল ডিজাইন।","why":"ভুল পুরুত্বে কম্পন, ফাটল, ডিফ্লেকশন; ভুল রডে ধস।","steps":["স্প্যান অনুযায়ী টাইপ ঠিক","পুরুত্ব (স্প্যান/ডেপথ রেশিও)","লোড ও মোমেন্ট","রড ও স্পেসিং","ওপেনিং ডিটেইল","স্বাক্ষর"],"mistakes":["পুরুত্ব কম","কর্নার রিইনফোর্সমেন্ট বাদ","ক্যান্টিলিভার ডিটেইল ভুল"],"tips":["ক্যান্টিলিভার স্ল্যাবে টপ রড বাড়ান","ওপেনিংয়ের চারপাশে এক্সট্রা রড"],"checklist":["পুরুত্ব","মেইন রড","ডিস্ট্রিবিউশন রড","কর্নার ডিটেইল"]},
+          {"id":12,"en":"Staircase Design","bn":"সিঁড়ি ডিজাইন","phase":"২. ডিজাইন","what":"রাইজার-ট্রেড, হেডরুম, ল্যান্ডিং, রড ও বিম ডিজাইন।","why":"ভুল মাপে সিঁড়ি ব্যবহারে অসুবিধা, হেড কম হলে মাথায় লাগে, ভুল রডে ধস।","steps":["ফ্লোর উচ্চতা থেকে রাইজার সংখ্যা","ট্রেড ও রাইজার মাপ","হেডরুম ≥ ২.১ মি","ল্যান্ডিং ও সাপোর্ট বিম","রড ডিটেইল"],"mistakes":["রাইজার-ট্রেড অসম","হেডরুম কম","রেলিং উচ্চতা ভুল"],"tips":["মডেল রুমে ব্যবহার করে দেখুন","ল্যান্ডিংয়ে হ্যান্ডরেল দিন"],"checklist":["রাইজার","ট্রেড","হেডরুম","ল্যান্ডিং","রড ডিটেইল"]},
+          {"id":13,"en":"Seismic Design (BNBC)","bn":"ভূমিকম্প ডিজাইন (BNBC)","phase":"২. ডিজাইন","what":"BNBC ২০২০ অনুযায়ী জোন, সাইট ক্লাস, R ফ্যাক্টর ও ডিটেইলিং মেনে ভবন ডিজাইন যাতে ভূমিকম্পে টিকে যায়।","why":"বাংলাদেশ সাইসমিক জোনে; ভুল ডিজাইনে ভূমিকম্পে ধস নামে ও জানহানি হয়।","steps":["জোন ও সাইট ক্লাস","সাইসমিক ওয়েট","বেস শিয়ার","লোড কম্বিনেশন","Ductile detailing","ইঞ্জিনিয়ার স্বাক্ষর"],"mistakes":["পুরনো BNBC ব্যবহার","Ductile detailing বাদ","কনফাইন্ড জোনে স্টিরাপ না ঘন করা"],"risks":["ভূমিকম্পে ধস","ভঙ্গুর বিম-কলাম জয়েন্ট","জীবনহানি"],"tips":["BNBC ২০২০ সর্বশেষ সংস্করণ ব্যবহার করুন","শিয়ার ওয়াল রাখলে সাইসমিক পারফরম্যান্স ভালো"],"checklist":["জোন","সাইট ক্লাস","বেস শিয়ার","ডিটেইলিং","স্বাক্ষর"]},
+          {"id":14,"en":"RCC Column Design","bn":"আরসিসি কলাম ডিজাইন","phase":"৩. কাঠামো","what":"কলাম স্ল্যাব ও বিমের লোড ফাউন্ডেশনে নামায়। লোড, গ্রেড, রড ও স্পেসিং BNBC অনুযায়ী নির্ধারিত হয়।","why":"ভুল কলাম ডিজাইনে স্ল্যাব ফেটে যায়, পুরো ভবন অসম বসে যায়।","steps":["অবস্থান ও গ্রিড","লোড ক্যালকুলেশন","কংক্রিট ও স্টিল গ্রেড","রড ও স্পেসিং","টাই ও ল্যাপ","স্বাক্ষর"],"mistakes":["ন্যূনতম রড না রাখা","কভার ব্লক না দেওয়া","ল্যাপ লেংথ কম"],"risks":["Punching shear","Differential settlement","ভূমিকম্পে ধস"],"tips":["ঢালাইয়ের আগে রড চেকলিস্টে সই","নির্ধারিত কভার ব্লক ব্যবহার"],"checklist":["লোড","রড স্পেসিং","ল্যাপ ও হুক","কভার","থার্ড-পার্টি যাচাই"]},
+          {"id":15,"en":"Footing Design","bn":"ফুটিং ডিজাইন","phase":"৩. কাঠামো","what":"কলামের লোড মাটিতে ছড়িয়ে দেওয়ার জন্য ফুটিং সাইজ, পুরুত্ব ও রড ডিজাইন।","why":"ভুল ফুটিং ডিজাইনে বসে যাওয়া, পাঞ্চিং শিয়ার ফেইলিউর, ফাটল হয়।","steps":["ভারবহন ক্ষমতা","ফুটিং এরিয়া","পুরুত্ব ও পাঞ্চিং","বটম রড","সেটেলমেন্ট যাচাই"],"mistakes":["ফুটিং এরিয়া কম","পাঞ্চিং চেক না করা","সেটেলমেন্ট হিসাব না করা"],"risks":["বসে যাওয়া","পাঞ্চিং ফেইলিউর","ফাটল"],"tips":["পাশের ফুটিংয়ের সাথে সেটেলমেন্ট মিলিয়ে দেখুন","রাফট হলে পুরো এলাকা একসাথে হিসাব"],"checklist":["এরিয়া","পুরুত্ব","রড","সেটেলমেন্ট"]},
+          {"id":16,"en":"Pile Foundation","bn":"পাইল ফাউন্ডেশন","phase":"৩. কাঠামো","what":"নরম মাটির নিচে শক্ত স্তরে লোড পৌঁছাতে পাইল ড্রিলিং/ড্রাইভিং করে। লোড টেস্ট দিয়ে ক্ষমতা যাচাই।","why":"ভুল পাইলে সেটেলমেন্ট, পাইল ফেইলিউর, ভবনে ক্ষতি।","steps":["পাইল ডায়া ও লেংথ ঠিক","বোরিং বা ড্রাইভিং","রিইনফোর্সমেন্ট কেজ নামানো","কংক্রিটিং","লোড টেস্ট (Static/Dynamic)","পাইল ক্যাপ"],"mistakes":["পাইল লেংথ কম","কেজ ভুল সেন্টারে","লোড টেস্ট না করা"],"risks":["সেটেলমেন্ট","পাইল ব্রেক","ভবনে অসম বসে যাওয়া"],"tips":["বোরিং লগ রাখুন","কমপক্ষে ১% পাইলে টেস্ট"],"checklist":["ডায়া ও লেংথ","কেজ","কংক্রিটিং","লোড টেস্ট","পাইল ক্যাপ"]},
+          {"id":17,"en":"Raft Foundation","bn":"রাফট ফাউন্ডেশন","phase":"৩. কাঠামো","what":"দুর্বল মাটিতে পুরো ভবনের নিচে একসাথে স্ল্যাবের মতো ফাউন্ডেশন, যা লোড সমানভাবে ছড়ায়।","why":"ভুল ডিজাইনে অসম সেটেলমেন্ট, ফাটল, পানির চাপে সমস্যা।","steps":["সয়েল রিপোর্ট","পুরুত্ব ও রড ডিজাইন","পানি নিরোধক","কনস্ট্রাকশন জয়েন্ট","কিউরিং"],"mistakes":["পুরুত্ব কম","ওয়াটারপ্রুফিং বাদ","জয়েন্ট ভুল"],"risks":["অসম সেটেলমেন্ট","পানি ঢোকা","ফাটল"],"tips":["রাফটে ওয়াটারপ্রুফিং বাধ্যতামূলক","বেসমেন্টে ডিওয়াটারিং ভালোভাবে করুন"],"checklist":["পুরুত্ব","রড","ওয়াটারপ্রুফিং","জয়েন্ট"]},
+          {"id":18,"en":"Beam-Column Joint","bn":"বিম-কলাম জয়েন্ট","phase":"৩. কাঠামো","what":"বিম ও কলাম যেখানে মেলে সেখানে রড, স্টিরাপ ও কনফাইন্ড জোনের ডিটেইল।","why":"সাইসমিকে জয়েন্ট সবচেয়ে গুরুত্বপূর্ণ; ভুল হলে ভঙ্গুর ধস।","steps":["জয়েন্টে স্টিরাপ ঘন","আঁকড়ে ধরার লেংথ","জয়েন্ট কনফাইনমেন্ট","কংক্রিটিং ক্রম"],"mistakes":["স্টিরাপ কম","জয়েন্টে কংক্রিট ভুল","ল্যাপ জয়েন্টেই"],"risks":["ভঙ্গুর ধস","জয়েন্ট ফেইলিউর"],"tips":["জয়েন্টে ছোট স্ল্যাম্পের কংক্রিট","ছবি তুলে রাখুন ঢালাইয়ের আগে"],"checklist":["স্টিরাপ","কনফাইনমেন্ট","কংক্রিট","ছবি"]},
+          {"id":19,"en":"Bar Bending Schedule","bn":"বার বেন্ডিং শিডিউল","phase":"৩. কাঠামো","what":"প্রতিটি রডের মাপ, সংখ্যা, বাঁক, হুক, ল্যাপ সব তালিকাভুক্ত করা BBS।","why":"BBS ভুল হলে রড বেশি/কম আসে, অপচয় হয়, ল্যাপ ভুল হয়ে কাঠামো দুর্বল।","steps":["ড্রয়িং থেকে রড বের করা","হুক ও বাঁকের মাপ","ল্যাপ হিসাব","টোটাল ওজন","ক্রয়ের সাথে মিলানো"],"mistakes":["ল্যাপ ভুল","হুক বাদ","অপচয় না ধরা"],"tips":["BBS ও ড্রয়িং মিলিয়ে চেক করুন","নমুনা রড বেঁকিয়ে দেখুন"],"checklist":["মাপ","সংখ্যা","ল্যাপ","হুক","ওজন"]},
+          {"id":20,"en":"Concrete Mix Design","bn":"কংক্রিট মিক্স ডিজাইন","phase":"৩. কাঠামো","what":"সিমেন্ট, বালি, খোয়া, পানি ও অ্যাডমিক্সচারের সঠিক অনুপাত ঠিক করা নির্দিষ্ট গ্রেডের জন্য।","why":"ভুল মিক্সে কম শক্তি, কাজে সমস্যা, ফাটল।","steps":["টার্গেট স্ট্রেংথ","ওয়াটার-সিমেন্ট রেশিও","উপাদানের পরিমাণ","ট্রায়াল মিক্স","কিউব টেস্টে যাচাই"],"mistakes":["পানি বেশি","গ্রেড ভুল","অ্যাডমিক্সচার ভুল মাত্রায়"],"tips":["ট্রায়াল মিক্স ছাড়া সাইটে শুরু করবেন না","বাজারজাত মিক্স হলে সার্টিফিকেট দেখুন"],"checklist":["টার্গেট শক্তি","W/C","উপাদান","কিউব টেস্ট"]},
+          {"id":21,"en":"Formwork & Shuttering","bn":"ফর্মওয়ার্ক ও শাটারিং","phase":"৩. কাঠামো","what":"কংক্রিট ঢালার আগে সঠিক আকারে ধরে রাখার অস্থায়ী কাঠামো। কাঠ, স্টিল বা অ্যালুমিনিয়াম।","why":"ভুল শাটারিংয়ে কংক্রিট বেরিয়ে যায়, ঢালাই ভেঙে পড়ে, পৃষ্ঠ অমসৃণ হয়।","steps":["শাটারিং প্ল্যান","ম্যাটেরিয়াল নির্বাচন","সাপোর্ট ও প্রপিং","রিলিজ এজেন্ট","ঢালাইয়ের আগে যাচাই","কিউরিংয়ের পর খোলা"],"mistakes":["প্রপিং কম","রিলিজ এজেন্ট না দেওয়া","ভুল সময়ে খোলা"],"risks":["ঢালাই ভেঙে পড়া","কর্মী আঘাত","পৃষ্ঠ নষ্ট"],"tips":["স্ল্যাব প্রপিং ৭–১৪ দিন রাখুন","স্টিল শাটারিং বারবার ব্যবহারে সাশ্রয়"],"checklist":["প্ল্যান","প্রপিং","রিলিজ","যাচাই"]},
+          {"id":22,"en":"Rebar Placement & Cover","bn":"রড প্লেসমেন্ট ও কভার","phase":"৩. কাঠামো","what":"ড্রয়িং অনুযায়ী রড বসানো, স্পেসিং ঠিক রাখা, কভার ব্লক দিয়ে নির্ধারিত কভার নিশ্চিত করা।","why":"কভার কম হলে রডে মরিচা, শক্তি কমে; স্পেসিং ভুল হলে লোড ভুলভাবে ছড়ায়।","steps":["ড্রয়িং দেখে রড কাটিং","স্পেসিং মার্কিং","রড বাঁধা","কভার ব্লক বসানো","ইঞ্জিনিয়ার যাচাই"],"mistakes":["কভার ব্লক বাদ","স্পেসিং বেশি","রড নোংরা থাকা"],"tips":["কভার ব্লক কংক্রিটের সমান গ্রেডের","ঢালাইয়ের আগে ছবি তুলুন"],"checklist":["স্পেসিং","কভার","ল্যাপ","ইঞ্জিনিয়ার সই"]},
+          {"id":23,"en":"Concrete Pouring","bn":"কংক্রিট ঢালাই","phase":"৩. কাঠামো","what":"মিক্সার বা পাম্প দিয়ে কংক্রিট সঠিকভাবে ঢালা, ভাইব্রেট করা, লেভেল করা।","why":"ভুল ঢালাইয়ে হানি (honeycomb), কোল্ড জয়েন্ট, শক্তি কম হয়।","steps":["ঢালাইয়ের আগে স্ল্যাম্প চেক","স্তরে স্তরে ঢালা","ভাইব্রেটর দিয়ে কম্প্যাকশন","লেভেল ও ফিনিশ","কিউরিং শুরু"],"mistakes":["একসাথে বেশি পুরু ঢালা","ভাইব্রেটর বেশি ব্যবহার","জয়েন্টে কোল্ড জয়েন্ট"],"risks":["হানি","কোল্ড জয়েন্ট","কম শক্তি"],"tips":["ভাইব্রেটর ৫–১০ সেকেন্ড প্রতি পয়েন্টে","বৃষ্টির সময় ঢালাই এড়ান"],"checklist":["স্ল্যাম্প","স্তর","কম্প্যাকশন","কিউরিং"]},
+          {"id":24,"en":"Slump & Cube Test","bn":"স্ল্যাম্প ও কিউব টেস্ট","phase":"৩. কাঠামো","what":"স্ল্যাম্প টেস্টে কংক্রিটের কাজযোগ্যতা, কিউব টেস্টে ৭ ও ২৮ দিনের শক্তি যাচাই।","why":"টেস্ট না করলে কংক্রিটের শক্তি প্রমাণিত হয় না; ডিসপিউটে প্রমাণ থাকে না।","steps":["নমুনা সংগ্রহ","স্ল্যাম্প টেস্ট","কিউব তৈরি","২৪ ঘণ্টা কিউরিং ট্যাংকে","৭ ও ২৮ দিনে টেস্ট","রিপোর্ট ফাইল"],"mistakes":["ভুল পদ্ধতিতে নমুনা","লেবেল না করা","ফেইল রিপোর্ট লুকানো"],"tips":["প্রতি ৫০ m³ বা প্রতি লটে ১ সেট কিউব","নমুনায় তারিখ ও স্থান লেবেল"],"checklist":["স্ল্যাম্প","কিউব","কিউরিং","রিপোর্ট"]},
+          {"id":25,"en":"Lap & Development Length","bn":"ল্যাপ ও ডেভেলপমেন্ট লেংথ","phase":"৩. কাঠামো","what":"রড জোড়া দেওয়ার সময় কতটুকু ওভারল্যাপ করতে হবে (lap) এবং কংক্রিটে রড আঁকড়ে ধরার জন্য কতটুকু লেংথ লাগবে (development length)।","why":"কম ল্যাপে জয়েন্ট দুর্বল হয়, রড স্লিপ করে, কাঠামো ভেঙে পড়ে।","steps":["রড ডায়া ও গ্রেড","কংক্রিট গ্রেড","BNBC টেবিল থেকে ল্যাপ","টেনশন ও কম্প্রেশন আলাদা","ডিটেইলে দেখানো"],"mistakes":["একই জায়গায় সব ল্যাপ","কম ল্যাপ","কম্প্রেশন ও টেনশন গুলিয়ে ফেলা"],"tips":["ল্যাপ স্ট্যাগার করুন","ল্যাপ জোনে স্টিরাপ ঘন করুন"],"checklist":["রড ডায়া","গ্রেড","ল্যাপ লেংথ","স্ট্যাগার"]},
+          {"id":26,"en":"Concrete Curing & Waterproofing","bn":"কংক্রিট কিউরিং ও ওয়াটারপ্রুফিং","phase":"৪. কাজ ও মান","what":"ঢালাইয়ের পর আর্দ্রতা ধরে রেখে শক্তি অর্জনে সাহায্য (curing)। ছাদ, বাথরুম, বেসমেন্টে পানি আটকানো (waterproofing)।","why":"কিউরিং ঠিক না হলে ফাটল ও কম শক্তি; ওয়াটারপ্রুফিং ভুল হলে পরে মেরামত ব্যয়বহুল।","steps":["নির্ধারিত সময়ে কিউরিং শুরু","ভেজা চট বা কিউরিং কম্পাউন্ড","স্পেক অনুযায়ী দিন","ওয়াটারপ্রুফিংয়ের আগে পৃষ্ঠ প্রস্তুতি","ম্যাটেরিয়াল প্রয়োগ","পন্ডিং টেস্ট"],"mistakes":["কিউরিং মাঝপথে বন্ধ","কর্নার ও পাইপ জয়েন্টে সিল না করা"],"risks":["ফাটল","ড্যাম্প","লিকেজ","ব্যয়বহুল মেরামত"],"tips":["গরম দিনে বেশি সতর্ক","পন্ডিং টেস্ট ২৪ ঘণ্টা"],"checklist":["কিউরিং শুরু","দিন","পৃষ্ঠ প্রস্তুতি","পন্ডিং টেস্ট"]},
+          {"id":27,"en":"Brick Masonry","bn":"ইটের গাঁথনি","phase":"৪. কাজ ও মান","what":"সিমেন্ট-বালি মর্টার দিয়ে ইট সাজিয়ে দেয়াল তৈরি।","why":"ভুল গাঁথনিতে দেয়াল ফাটে, প্লাস্টার খসে, পানি ঢোকে।","steps":["ইট পানিতে ভিজিয়ে নেওয়া","মর্টার অনুপাত","কোর্স ও প্লাম্ব","জয়েন্ট পূরণ","কিউরিং"],"mistakes":["শুকনো ইট ব্যবহার","মর্টার অনুপাত ভুল","কোর্স অসম"],"tips":["১ম শ্রেণির ইট ব্যবহার করুন","প্রতিদিন ১ মিটারের বেশি উঠাবেন না"],"checklist":["ইট ভিজানো","মর্টার","কোর্স","প্লাম্ব","কিউরিং"]},
+          {"id":28,"en":"Plastering","bn":"প্লাস্টার","phase":"৪. কাজ ও মান","what":"দেয়াল ও সিলিংয়ে সিমেন্ট-বালি মর্টারের স্তর, যা সমতল ও সুরক্ষা দেয়।","why":"ভুল প্লাস্টারে ফাটল, খসে পড়া, পেইন্টে সমস্যা।","steps":["পৃষ্ঠ পরিষ্কার ও ভেজানো","প্রথম কোট (১:৪ বা ১:৫)","দ্বিতীয় কোট","ফিনিশিং ও কিউরিং"],"mistakes":["পৃষ্ঠ ভেজানো না","এক কোটে বেশি পুরু","কিউরিং না করা"],"tips":["একসাথে ১২–১৫ মিমি এর বেশি পুরু নয়","কোণায় কর্ণার গার্ড ব্যবহার"],"checklist":["পৃষ্ঠ প্রস্তুতি","মর্টার অনুপাত","পুরুত্ব","কিউরিং"]},
+          {"id":29,"en":"Tiling","bn":"টাইলস","phase":"৪. কাজ ও মান","what":"মেঝে ও দেয়ালে সিরামিক/পোরসেলিন টাইলস লাগানো।","why":"ভুল বসালে ফাঁকা, খসে পড়া, লেভেল সমস্যা।","steps":["পৃষ্ঠ সমতল করা","লেআউট প্ল্যান","অ্যাডহেসিভ বা মর্টার","স্পেসার","গ্রাউটিং","ক্লিনিং"],"mistakes":["পৃষ্ঠ সমতল না","স্পেসার না দেওয়া","গ্রাউট ভুল"],"tips":["প্রথমে শুকনো লেআউট দেখুন","একই ব্যাচের টাইলস ব্যবহার"],"checklist":["পৃষ্ঠ","লেআউট","স্পেসার","গ্রাউট"]},
+          {"id":30,"en":"Painting","bn":"পেইন্টিং","phase":"৪. কাজ ও মান","what":"দেয়াল ও কাঠামো রক্ষা ও সৌন্দর্যায়নের জন্য রং প্রয়োগ।","why":"ভুল প্রস্তুতি বা রঙে পিলিং, ফাটল, ছোপ পড়া।","steps":["পৃষ্ঠ পরিষ্কার ও স্যান্ডিং","প্রাইমার","পুট্টি","স্যান্ডিং","আন্ডারকোট","ফিনিশ কোট"],"mistakes":["প্রাইমার বাদ","পৃষ্ঠ ভেজা থাকলে রং","কম কোট"],"tips":["আবহাওয়া শুষ্ক হলে রং","ভালো ব্র্যান্ডে সাশ্রয়"],"checklist":["প্রস্তুতি","প্রাইমার","পুট্টি","আন্ডারকোট","ফিনিশ"]},
+          {"id":31,"en":"False Ceiling","bn":"ফলস সিলিং","phase":"৪. কাজ ও মান","what":"আসল সিলিংয়ের নিচে জিপসাম বা PVC দিয়ে দ্বিতীয় সিলিং, যেখানে লাইট ও ডাক্ট লুকানো যায়।","why":"ভুল ডিজাইনে হেডরুম কম, লিক হলে ভেঙে ফেলতে হয়।","steps":["হেডরুম ঠিক","ফ্রেম তৈরি","বোর্ড লাগানো","জয়েন্ট ফিলার","লাইট ও ডাক্ট","পেইন্ট"],"mistakes":["হেডরুম কম","অ্যাক্সেস প্যানেল বাদ","লিক প্রতিরোধ না করা"],"tips":["অ্যাক্সেস প্যানেল রাখুন","MEP কো-অর্ডিনেশন করুন"],"checklist":["হেডরুম","ফ্রেম","বোর্ড","অ্যাক্সেস প্যানেল"]},
+          {"id":32,"en":"DPC & Termite Treatment","bn":"ডিপিসি ও টার্মাইট ট্রিটমেন্ট","phase":"৪. কাজ ও মান","what":"DPC (Damp Proof Course) দেয়ালের নিচে পানি ওঠা আটকায়; টার্মাইট ট্রিটমেন্ট কাঠ ও মাটিতে উইপোকা প্রতিরোধ।","why":"DPC বাদ দিলে দেয়ালে স্যাঁতসেঁতে ও লবণ; টার্মাইট বাদ দিলে ফার্নিচার ও কাঠামো নষ্ট।","steps":["প্লিন্থ লেভেলে DPC","টার্মাইট কেমিক্যাল মাটিতে","ফাউন্ডেশনের চারপাশে ব্যান্ড","ফাঁকা জায়গায় স্প্রে","ওয়ারেন্টি নিন"],"mistakes":["DPC ও টার্মাইট বাদ","ভুল কেমিক্যাল","ওয়ারেন্টি না নেওয়া"],"tips":["টার্মাইট ট্রিটমেন্ট ৫–১০ বছর ওয়ারেন্টি সহ","ফিনিশিংয়ের আগে করুন"],"checklist":["DPC","টার্মাইট কেমিক্যাল","ব্যান্ড","ওয়ারেন্টি"]},
+          {"id":33,"en":"Wood Work","bn":"কাঠের কাজ","phase":"৪. কাজ ও মান","what":"দরজা-জানালার ফ্রেম, কেবিনেট, ফার্নিচার — কাঠ বা MDF দিয়ে তৈরি।","why":"ভুল কাঠ বা কাজে ফুলে যাওয়া, ফাটা, পোকা ধরা।","steps":["কাঠ নির্বাচন","মাপ ও কাটিং","অ্যাসেম্বলি","ফিনিশ (পেইন্ট/পলিশ)","ফিটিং"],"mistakes":["ভেজা কাঠ","ট্রিটমেন্ট না করা","মাপ ভুল"],"tips":["সিজনড কাঠ ব্যবহার করুন","অ্যান্টি-টার্মাইট ট্রিটমেন্ট"],"checklist":["কাঠ","মাপ","ফিনিশ","ফিটিং"]},
+          {"id":34,"en":"Aluminum & Glass Work","bn":"অ্যালুমিনিয়াম ও গ্লাস","phase":"৪. কাজ ও মান","what":"জানালা, দরজা ও পার্টিশনে অ্যালুমিনিয়াম ফ্রেম ও গ্লাস।","why":"ভুল সিলে পানি ঢোকে, গ্লাস ফাটে, শব্দ ও তাপ ঢোকে।","steps":["সেকশন ও গ্লাস নির্বাচন","মাপ নেওয়া","ফ্রেম তৈরি","ফিটিং","সিলিং (gasket/silicone)"],"mistakes":["সিলিং বাদ","টেম্পার্ড গ্লাস না দেওয়া","ভুল সেকশন"],"risks":["পানি ঢোকা","গ্লাস ফাটা","শব্দ দূষণ"],"tips":["নিচতলায় টেম্পার্ড গ্লাস","সিলিকোন ভালো মানের"],"checklist":["সেকশন","গ্লাস","সিলিং","ফিটিং"]},
+          {"id":35,"en":"Site Safety (HSE)","bn":"সাইট নিরাপত্তা","phase":"৫. নিরাপত্তা","what":"Health, Safety & Environment — সাইটে দুর্ঘটনা, অসুস্থতা ও পরিবেশ ক্ষতি রোধের পরিকল্পিত ব্যবস্থা।","why":"একটি দুর্ঘটনা কাজ বন্ধ, ক্ষতিপূরণ, সুনাম নষ্ট, আইনি সমস্যা।","steps":["ঝুঁকি চিহ্নিত করে পরিকল্পনা","সেফটি অফিসার","সবাইকে PPE","ইন্ডাকশন ট্রেনিং","দৈনিক টুলবক্স টক","ঘটনা রেকর্ড"],"mistakes":["PPE ব্যবহার তদারকি না","ছোট ঘটনা না লেখা"],"tips":["জরুরি নম্বর গেটে","ফায়ার এক্সটিংগুইশার সব ফ্লোরে"],"checklist":["PPE","JHA","ইন্ডাকশন","প্রাথমিক চিকিৎসা","ফায়ার"]},
+          {"id":36,"en":"Scaffolding","bn":"স্ক্যাফোল্ডিং","phase":"৫. নিরাপত্তা","what":"উঁচু কাজের জন্য অস্থায়ী প্ল্যাটফর্ম। স্টিল, অ্যালুমিনিয়াম বা বাঁশ।","why":"ভুল স্ক্যাফোল্ড ভেঙে পড়ে, কর্মী পড়ে আহত/মৃত।","steps":["স্ক্যাফোল্ড প্ল্যান","বেস সলিড","ব্রেসিং","প্ল্যাটফর্ম বোর্ড","গার্ডরেল","ট্যাগ সিস্টেম"],"mistakes":["ব্রেসিং বাদ","প্ল্যাটফর্ম না বাঁধা","লোড লিমিট না দেখা"],"risks":["ভেঙে পড়া","কর্মী পড়ে যাওয়া","জানহানি"],"tips":["প্রতিদিন ব্যবহারের আগে চেক","রঙিন ট্যাগ দিয়ে সার্টিফাই"],"checklist":["বেস","ব্রেসিং","প্ল্যাটফর্ম","গার্ডরেল","ট্যাগ"]},
+          {"id":37,"en":"Excavation Safety","bn":"খনন নিরাপত্তা","phase":"৫. নিরাপত্তা","what":"গর্ত বা ট্রেঞ্চ খননের সময় মাটি ধসে পড়া রোধ এবং আশপাশের কাঠামো সুরক্ষিত রাখা।","why":"মাটি ধসে কর্মী চাপা পড়ে, পাশের ভবনে ফাটল ধরে।","steps":["মাটির ধরন যাচাই","ঢাল (slope) রাখা","শোরিং বা ব্রেসিং","ল্যাডার দিয়ে প্রবেশ","পাশের ভবনের সেটেলমেন্ট মনিটর","ব্যারিকেড"],"mistakes":["শোরিং বাদ","ল্যাডার না রাখা","ব্যারিকেড বাদ"],"risks":["ধসে কর্মী চাপা","পাশের ভবনে ফাটল","পানিতে ডুবে যাওয়া"],"tips":["প্রতিদিন সকালে চেক","বৃষ্টির পরে ঢালে পানি না জমতে দেওয়া"],"checklist":["মাটির ধরন","ঢাল/শোরিং","ল্যাডার","ব্যারিকেড"]},
+          {"id":38,"en":"Fall Protection","bn":"পতন সুরক্ষা","phase":"৫. নিরাপত্তা","what":"২ মিটারের বেশি উচ্চতায় কাজে নিরাপত্তা বেল্ট, হারনেস, গার্ডরেল, নেট।","why":"পড়ে যাওয়া দুর্ঘটনার সবচেয়ে বড় কারণ নির্মাণে।","steps":["রিস্ক অ্যাসেসমেন্ট","গার্ডরেল বা নেট","ব্যক্তিগত হারনেস","অ্যাংকর পয়েন্ট","ট্রেনিং"],"mistakes":["হারনেস না পড়া","অ্যাংকর দুর্বল","গার্ডরেল বাদ"],"tips":["অ্যাংকর ২২ kN ধরে রাখতে হবে","প্রতিদিন হারনেস চেক"],"checklist":["গার্ডরেল/নেট","হারনেস","অ্যাংকর","ট্রেনিং"]},
+          {"id":39,"en":"Electrical Safety","bn":"বিদ্যুৎ নিরাপত্তা","phase":"৫. নিরাপত্তা","what":"সাইটে অস্থায়ী বিদ্যুৎ, তার, ডিস্ট্রিবিউশন বোর্ড ও যন্ত্রপাতির নিরাপদ ব্যবহার।","why":"ভুল তার বা আর্থিংয়ে শক, আগুন, মৃত্যু।","steps":["অস্থায়ী বোর্ড","আর্থিং","RCCB/ELCB","তার সঠিক রেটিং","লকআউট ট্যাগআউট","শুধু লাইসেন্সধারী ইলেকট্রিশিয়ান"],"mistakes":["নগ্ন তার","আর্থিং বাদ","ওভারলোড"],"risks":["শক","আগুন","মৃত্যু"],"tips":["প্রতিদিন বোর্ড চেক","বৃষ্টিতে অস্থায়ী বোর্ড কভার"],"checklist":["বোর্ড","আর্থিং","RCCB","লাইসেন্স"]},
+          {"id":40,"en":"Electrical Load & Wiring","bn":"বৈদ্যুতিক লোড ও তার","phase":"৬. MEP","what":"ভবনের বৈদ্যুতিক চাহিদা হিসাব করে ক্যাবল সাইজ, সার্কিট ও ডিস্ট্রিবিউশন বোর্ড ঠিক করা।","why":"ভুল লোডে ওভারলোড, আগুন, ভোল্টেজ ড্রপ।","steps":["লোড ক্যালকুলেশন","সার্কিট ভাগ","ক্যাবল সাইজ BNBC টেবিল","কনডুইট রুট","DB ও SLD","আর্থিং"],"mistakes":["ভবিষ্যৎ লোড বাদ","কম ক্যাবল সাইজ","আর্থিং স্বাধীনভাবে না"],"risks":["আগুন","ভোল্টেজ ড্রপ","যন্ত্র নষ্ট"],"tips":["২০–২৫% রিজার্ভ রাখুন","রং-কোডেড ক্যাবল"],"checklist":["লোড","SLD","আর্থিং","কনডুইট"]},
+          {"id":41,"en":"Earthing & Lightning Protection","bn":"আর্থিং ও বজ্রসুরক্ষা","phase":"৬. MEP","what":"আর্থিং বিদ্যুৎ লিক হলে নিরাপদে মাটিতে পাঠায়; বজ্রসুরক্ষা বজ্রপাত থেকে ভবন রক্ষা করে।","why":"আর্থিং ছাড়া শক ও আগুনের ঝুঁকি; LPS ছাড়া বজ্রে আগুন ও যন্ত্র নষ্ট।","steps":["আর্থিং সিস্টেম (rod/plate)","আর্থিং রেজিস্ট্যান্স মাপা","বন্ডিং","LPS ডিজাইন (rolling sphere)","এয়ার টার্মিনাল","ডাউন কন্ডাক্টর","আর্থিং পিট"],"mistakes":["আর্থিং রেজিস্ট্যান্স না মাপা","LPS বাদ","বন্ডিং বাদ"],"risks":["শক","আগুন","যন্ত্র নষ্ট"],"tips":["আর্থিং রেজিস্ট্যান্স < ১ Ω রাখুন (স্পেক অনুযায়ী)","বার্ষিক পরীক্ষা"],"checklist":["আর্থিং","রেজিস্ট্যান্স","বন্ডিং","LPS","পরীক্ষা"]},
+          {"id":42,"en":"Plumbing & Sanitary","bn":"প্লাম্বিং ও স্যানিটারি","phase":"৬. MEP","what":"পানি সরবরাহ, ড্রেনেজ, স্যানিটারি ফিক্সচার, ট্যাংক ও পাম্পের ডিজাইন ও ইনস্টলেশন।","why":"ভুল প্লাম্বিংয়ে লিক, দুর্গন্ধ, পানির অপচয়, বাথরুমে ড্যাম্প।","steps":["চাহিদা হিসাব","পাইপ সাইজ","রুট প্ল্যান","স্লিভ বসানো","পাইপ ইনস্টলেশন","প্রেসার টেস্ট","ফিক্সচার"],"mistakes":["স্লিভ ঢালাইয়ের পরে","ভেন্ট পাইপ বাদ","ঢাল উল্টো দিকে"],"risks":["লিকেজ","ড্যাম্প","সাইফন","দুর্গন্ধ"],"tips":["পাইপ ঢালাইয়ের আগে রাখুন","লুকানোর আগে প্রেসার টেস্ট"],"checklist":["স্লিভ","পাইপ সাইজ","প্রেসার টেস্ট","ফিক্সচার"]},
+          {"id":43,"en":"Drainage System","bn":"ড্রেনেজ সিস্টেম","phase":"৬. MEP","what":"ময়লা পানি ও বৃষ্টির পানি সংগ্রহ করে নির্দিষ্ট পথে নিষ্কাশন।","why":"ভুল ড্রেনেজে জলাবদ্ধতা, ব্যাকফ্লো, দুর্গন্ধ, মশার প্রজনন।","steps":["পানি প্রবাহ প্ল্যান","পাইপ ঢাল","ম্যানহোল","STP বা সেপটিক","আউটলেট"],"mistakes":["ঢাল ভুল","ম্যানহোল দূরত্ব ভুল","বৃষ্টি ও ময়লা পানি একসাথে"],"risks":["জলাবদ্ধতা","দুর্গন্ধ","সংক্রামক রোগ"],"tips":["ফাউন্ডেশনের আগে ড্রেনেজ প্ল্যান","ইনভার্ট লেভেল চার্ট রাখুন"],"checklist":["ঢাল","ম্যানহোল","ইনভার্ট","আউটলেট"]},
+          {"id":44,"en":"Fire Fighting & Alarm","bn":"ফায়ার ফাইটিং ও অ্যালার্ম","phase":"৬. MEP","what":"স্প্রিংকলার, হোজ রিল, পাম্প, রিজার্ভার, স্মোক ডিটেক্টর, অ্যালার্ম প্যানেল — আগুন প্রতিরোধ ও নিয়ন্ত্রণ ব্যবস্থা।","why":"ফায়ার সিস্টেম না থাকলে আগুনে জানহানি; ফায়ার NOC না পেলে বসবাসের অনুমতি আটকে যায়।","steps":["হ্যাজার্ড ক্লাস","স্প্রিংকলার লেআউট","হাইড্রোলিক হিসাব","পাম্প ও রিজার্ভার","ডিটেক্টর","অ্যালার্ম প্যানেল","ফায়ার সার্ভিস পরিদর্শন"],"mistakes":["স্প্রিংকলার হেড কম","রিজার্ভার কম","পরীক্ষা না করা"],"risks":["আগুনে জানহানি","NOC না পাওয়া","বীমা সমস্যা"],"tips":["বার্ষিক ফায়ার ড্রিল","ব্যাটারি ব্যাকআপ সাইনেজ"],"checklist":["হ্যাজার্ড","লেআউট","হাইড্রোলিক","পাম্প","ডিটেক্টর","পরিদর্শন"]},
+          {"id":45,"en":"HVAC Design","bn":"এইচভিএসি ডিজাইন","phase":"৬. MEP","what":"হিটিং, ভেন্টিলেশন, এয়ার কন্ডিশনিং — তাপমাত্রা, আর্দ্রতা ও বাতাসের মান নিয়ন্ত্রণ।","why":"ভুল HVAC-এ অস্বস্তি, বেশি বিদ্যুৎ খরচ, বেসমেন্টে ধোঁয়া জমা।","steps":["কুলিং লোড","ডাক্ট সাইজ","AHU/FCU নির্বাচন","ডাক্ট রুট","ইনসুলেশন","ড্রেন","ব্যালেন্সিং"],"mistakes":["ডাক্ট ও বিম মিলিয়ে না দেখা","কনডেনসেট ড্রেনের ঢাল বাদ","বেসমেন্টে এয়ার চেঞ্জ কম"],"tips":["MEP কো-অর্ডিনেশন ড্রয়িং","ইনসুলেশন ধারাবাহিক"],"checklist":["কুলিং লোড","ডাক্ট","AHU","ড্রেন","ইনসুলেশন"]},
+          {"id":46,"en":"Lift & Generator","bn":"লিফট ও জেনারেটর","phase":"৬. MEP","what":"উঁচু ভবনে লিফট, বিদ্যুৎ বিভ্রাটে জেনারেটর — মানুষ চলাচল ও জরুরি বিদ্যুৎ।","why":"ভুল ডিজাইনে লিফট আটকে যায়, জেনারেটর ধোঁয়া/শব্দে সমস্যা।","steps":["ট্রাফিক অ্যানালাইসিস","লিফট স্পিড ও ক্যাপাসিটি","শ্যাফট ডিজাইন","জেনারেটর লোড","ভেন্টিলেশন","সাউন্ড প্রুফিং","ফুয়েল ট্যাংক"],"mistakes":["শ্যাফট কম","জেনারেটর লোড কম","ভেন্টিলেশন বাদ"],"risks":["লিফট আটকা","ধোঁয়া","শব্দ দূষণ"],"tips":["লিফটে ARD (Automatic Rescue Device)","জেনারেটর রুমে ফায়ার সেফটি"],"checklist":["ট্রাফিক","ক্যাপাসিটি","শ্যাফট","জেনারেটর লোড"]},
+          {"id":47,"en":"BOQ Preparation","bn":"বিওকিউ প্রস্তুতি","phase":"৭. ক্রয়","what":"ড্রয়িং থেকে পরিমাণ বের করে রেট দিয়ে মোট খরচের তালিকা তৈরি।","why":"ভুল BOQ-তে বাজেট ছাড়িয়ে যায়; ঠিকাদারের সাথে বিরোধ হয়।","steps":["ড্রয়িং ও স্পেক","পরিমাণ হিসাব","রেট সংগ্রহ","ছক তৈরি","ওভারহেড ও VAT"],"mistakes":["অপচয় না ধরা","পুরনো রেট","আইটেম বাদ"],"tips":["কন্টিনজেন্সি ৫–১০%","প্রতি আইটেমে কোড"],"checklist":["ড্রয়িং ভার্সন","পরিমাণ","রেট","কন্টিনজেন্সি"]},
+          {"id":48,"en":"Tender Process","bn":"টেন্ডার প্রক্রিয়া","phase":"৭. ক্রয়","what":"কাজ বা মাল সরবরাহের জন্য ঠিকাদার/ভেন্ডর নির্বাচন — দরপত্র আহ্বান, মূল্যায়ন ও চুক্তি।","why":"ভুল টেন্ডারে অদক্ষ ঠিকাদার, বাজেট বেশি, মান কম।","steps":["টেন্ডার ডকুমেন্ট","আহ্বান","দরপত্র খোলা","টেকনিক্যাল মূল্যায়ন","ফাইন্যান্সিয়াল","সুপারিশ","চুক্তি"],"mistakes":["স্কোপ অস্পষ্ট","টেকনিক্যাল মূল্যায়ন ছাড়া সর্বনিম্ন দর","চুক্তিতে শর্ত কম"],"tips":["৩+ দরপত্র","স্বচ্ছ রেকর্ড"],"checklist":["ডকুমেন্ট","আহ্বান","মূল্যায়ন","সুপারিশ","চুক্তি"]},
+          {"id":49,"en":"Vendor Evaluation","bn":"ভেন্ডর মূল্যায়ন","phase":"৭. ক্রয়","what":"মাল সরবরাহকারীর মান, দাম, সময় ও সেবা যাচাই করে নির্বাচন।","why":"ভুল ভেন্ডরে নিম্নমানের মাল, দেরি, কাজ বন্ধ।","steps":["তালিকা তৈরি","কোটেশন","তুলনা","নমুনা যাচাই","রেফারেন্স চেক","সুপারিশ"],"mistakes":["শুধু দাম দেখা","রেফারেন্স না নেওয়া","নমুনা না দেখা"],"tips":["গুরুত্বপূর্ণ মালে ২য় ভেন্ডর","রেট কনট্রাক্ট"],"checklist":["কোটেশন","তুলনা","নমুনা","রেফারেন্স"]},
+          {"id":50,"en":"Purchase Order & Delivery","bn":"পারচেজ অর্ডার ও ডেলিভারি","phase":"৭. ক্রয়","what":"PO-তে আইটেম, পরিমাণ, দাম, ডেলিভারি ঠিকানা ও সময় উল্লেখ করে অর্ডার দেওয়া।","why":"অস্পষ্ট PO-তে ভুল মাল, দেরি, পেমেন্ট বিরোধ।","steps":["PR অনুমোদন","PO তৈরি","অনুমোদন","ভেন্ডরকে পাঠানো","ডেলিভারি ফলো-আপ","রিসিভিং"],"mistakes":["ডেলিভারি ঠিকানা বাদ","মৌখিক অর্ডার","অনুমোদন ছাড়া"],"tips":["PO নম্বর চালানে","ওয়ারেন্টি শর্ত"],"checklist":["PR","PO","অনুমোদন","রিসিভিং"]},
+          {"id":51,"en":"Store Management","bn":"স্টোর ব্যবস্থাপনা","phase":"৭. ক্রয়","what":"সাইটে মাল সংরক্ষণ, ইস্যু, রিটার্ন ও স্টক হিসাব।","why":"ভুল স্টোরে চুরি, অপচয়, সময়মতো মাল না পাওয়া।","steps":["স্টোর লেআউট","রিসিভিং","ট্যাগ ও লেবেল","ইস্যু ফর্ম","স্টক কাউন্ট","রিপোর্ট"],"mistakes":["রেকর্ড না রাখা","ভুল স্টোরেজ","কাউন্ট না করা"],"tips":["সিমেন্ট মাটি থেকে উঁচুতে","প্রতি সপ্তাহে কাউন্ট"],"checklist":["লেআউট","রিসিভিং","ইস্যু","কাউন্ট"]},
+          {"id":52,"en":"Project Charter","bn":"প্রজেক্ট চার্টার","phase":"৮. ব্যবস্থাপনা","what":"প্রজেক্টের উদ্দেশ্য, স্কোপ, স্টেকহোল্ডার, বাজেট ও সময় — শুরুতে লিখিত।","why":"চার্টার ছাড়া স্কোপ ক্রিপ, দায় অস্পষ্ট, বিরোধ।","steps":["উদ্দেশ্য","স্কোপ ও সীমা","স্টেকহোল্ডার","বাজেট ও সময়","ঝুঁকি","স্বাক্ষর"],"mistakes":["স্কোপ অস্পষ্ট","স্টেকহোল্ডার বাদ","স্বাক্ষর না নেওয়া"],"tips":["সব পক্ষের সই","পরিবর্তনের প্রক্রিয়া"],"checklist":["উদ্দেশ্য","স্কোপ","স্টেকহোল্ডার","বাজেট","ঝুঁকি"]},
+          {"id":53,"en":"WBS & Gantt Chart","bn":"ডব্লিউবিএস ও গ্যান্ট চার্ট","phase":"৮. ব্যবস্থাপনা","what":"কাজকে ছোট ভাগে (WBS) ভেঙে সময়রেখায় সাজানো (Gantt)।","why":"WBS ছাড়া সময় ও খরচ নিয়ন্ত্রণ করা যায় না।","steps":["কাজ ভাঙা","সময়কাল","নির্ভরতা","সম্পদ","Gantt তৈরি","প্রগ্রেস ট্র্যাকিং"],"mistakes":["কাজ বেশি বড় রাখা","নির্ভরতা বাদ","আপডেট না করা"],"tips":["প্রতি কাজ ১–২ সপ্তাহে ভাগ করুন","সাপ্তাহিক আপডেট"],"checklist":["WBS","সময়","নির্ভরতা","Gantt"]},
+          {"id":54,"en":"CPM & Critical Path","bn":"সিপিএম ও ক্রিটিক্যাল পাথ","phase":"৮. ব্যবস্থাপনা","what":"কোন কাজের বিলম্ব পুরো প্রজেক্টের বিলম্ব ঘটায় (critical path) তা চিহ্নিত করা।","why":"ক্রিটিক্যাল পাথ না জানলে বিলম্বের কারণ ধরা পড়ে না।","steps":["নেটওয়ার্ক ডায়াগ্রাম","ফরওয়ার্ড পাস","ব্যাকওয়ার্ড পাস","ফ্লোট","ক্রিটিক্যাল পাথ","আপডেট"],"mistakes":["সব কাজ সমান ধরা","আপডেট না করা"],"tips":["নিয়ার-ক্রিটিক্যালও দেখুন","সাপ্তাহিক রি-ক্যালকুলেট"],"checklist":["নেটওয়ার্ক","ফরওয়ার্ড","ব্যাকওয়ার্ড","ক্রিটিক্যাল পাথ"]},
+          {"id":55,"en":"Risk Management","bn":"ঝুঁকি ব্যবস্থাপনা","phase":"৮. ব্যবস্থাপনা","what":"সম্ভাব্য সমস্যা আগে চিহ্নিত করে সম্ভাবনা ও প্রভাব মূল্যায়ন এবং প্রশমন পরিকল্পনা।","why":"ঝুঁকি আগে না ভাবলে সমস্যা হলে তাড়াহুড়ো সিদ্ধান্তে ক্ষতি বাড়ে।","steps":["ঝুঁকি চিহ্নিত","সম্ভাবনা ও প্রভাব রেটিং","প্রায়োরিটি","প্রশমন পরিকল্পনা","সাপ্তাহিক রিভিউ"],"mistakes":["একবার লিখে ফেলে রাখা","দায়িত্ব না দেওয়া"],"tips":["কন্টিনজেন্সি বাজেট","শীর্ষ ৫ ঝুঁকি প্রতি সপ্তাহে"],"checklist":["রেজিস্টার","রেটিং","দায়িত্ব","রিভিউ"]},
+          {"id":56,"en":"Change Management","bn":"পরিবর্তন ব্যবস্থাপনা","phase":"৮. ব্যবস্থাপনা","what":"স্কোপ, ডিজাইন বা সময়ে পরিবর্তন হলে লিখিত প্রক্রিয়ায় অনুমোদন।","why":"মৌখিক পরিবর্তনে বাজেট ও সময় নিয়ন্ত্রণ হারায়, বিরোধ হয়।","steps":["Change Request","প্রভাব বিশ্লেষণ","অনুমোদন","ডকুমেন্ট আপডেট","কমিউনিকেশন","ক্লোজ"],"mistakes":["মৌখিক পরিবর্তন","প্রভাব না দেখে অনুমোদন","ডকুমেন্ট না আপডেট"],"tips":["CR ফর্ম স্ট্যান্ডার্ড করুন","প্রভাবসহ অনুমোদন"],"checklist":["CR","প্রভাব","অনুমোদন","আপডেট"]},
+          {"id":57,"en":"Site Diary & DPR","bn":"সাইট ডায়েরি ও ডিপিআর","phase":"৮. ব্যবস্থাপনা","what":"প্রতিদিনের কাজ, শ্রমিক সংখ্যা, আবহাওয়া, বিঘ্ন ও ছবি লিখে রাখা।","why":"প্রমাণ না থাকলে বিল বিরোধ, বিলম্বের কারণ হারিয়ে যায়।","steps":["সকালে প্ল্যান","দিনের কাজ রেকর্ড","শ্রমিক ও যন্ত্র","ছবি","সই","রিপোর্ট প্রেরণ"],"mistakes":["দিন শেষে স্মৃতি থেকে","ছবি না রাখা","আবহাওয়া না লেখা"],"tips":["ছবিতে তারিখ ও লোকেশন","আবহাওয়া ও বিঘ্ন লিখুন"],"checklist":["কাজ","শ্রমিক","ছবি","সই"]},
+          {"id":58,"en":"Handover & As-built","bn":"হস্তান্তর ও এজ-বিল্ট","phase":"৯. হস্তান্তর","what":"কাজ শেষে মালিককে বুঝিয়ে দেওয়া — এজ-বিল্ট ড্রয়িং, ম্যানুয়াল, ওয়ারেন্টি, টেস্ট রিপোর্ট।","why":"এজ-বিল্ট ছাড়া ভবিষ্যতে ড্রিলিং বা সংস্কারে ক্ষতির ঝুঁকি।","steps":["Punch List","সম্পন্ন","কমিশনিং","এজ-বিল্ট","ম্যানুয়াল","প্রশিক্ষণ","সার্টিফিকেট"],"mistakes":["Punch List বাদ","এজ-বিল্ট শেষে","ম্যানুয়াল না দেওয়া"],"tips":["কাজ চলাকালীন মার্ক-আপ","মিটার রিডিং লিখে রাখুন"],"checklist":["Punch List","রিপোর্ট","এজ-বিল্ট","ম্যানুয়াল","সার্টিফিকেট"]},
+          {"id":59,"en":"Defect Liability Period","bn":"ডিএলপি","phase":"৯. হস্তান্তর","what":"হস্তান্তরের পর নির্দিষ্ট সময় (সাধারণত ১২–২৪ মাস) ঠিকাদার নিজের খরচে ত্রুটি সারায়; রিটেনশন মানি আটকে থাকে।","why":"লুকানো ত্রুটি পরে প্রকাশ পায়; DLP না থাকলে মালিক নিজে খরচ বহন করেন।","steps":["চুক্তিতে DLP ও রিটেনশন","হস্তান্তরের তারিখ থেকে শুরু","ত্রুটি লিখিতভাবে","মেরামত","স্বাক্ষর","রিটেনশন ছাড়"],"mistakes":["মুখে জানানো","তারিখ ভুলে যাওয়া"],"tips":["ত্রুটি লগ রাখুন","বর্ষার পর বিশেষ পরিদর্শন"],"checklist":["DLP তারিখ","রিটেনশন","ত্রুটি লগ","চূড়ান্ত পরিদর্শন"]},
+          {"id":60,"en":"Snag List & Final Inspection","bn":"স্ন্যাগ লিস্ট ও চূড়ান্ত পরিদর্শন","phase":"৯. হস্তান্তর","what":"কাজ শেষে ছোটখাটো ত্রুটির তালিকা (snag) তৈরি করে ঠিকাদারকে সারাতে বলা।","why":"snag না ধরলে ছোট ত্রুটি পরে বড় হয়, মালিক অসন্তুষ্ট।","steps":["রুমভিত্তিক পরিদর্শন","ছবিসহ তালিকা","ঠিকাদারকে প্রেরণ","সারানো","যাচাই","ক্লোজ"],"mistakes":["তালিকা না রাখা","ছবি না নেওয়া","ফলো-আপ না করা"],"tips":["প্রতি রুমে ছবি","সময়সীমা দিন"],"checklist":["পরিদর্শন","তালিকা","ছবি","যাচাই"]},
+          {"id":61,"en":"Cement Steel Brick Types","bn":"সিমেন্ট, রড ও ইটের ধরন","phase":"১০. ম্যাটেরিয়াল","what":"OPC/Composite/PSC সিমেন্ট, 40/60/500 গ্রেড রড, ১ম/২য়/৩য় শ্রেণির ইট — কাজে সঠিকটি বাছাই।","why":"ভুল ম্যাটেরিয়ালে শক্তি কম, দীর্ঘস্থায়িত্ব কম, খরচ বেশি।","steps":["স্পেকে ম্যাটেরিয়াল ঠিক","সার্টিফিকেট দেখে সংগ্রহ","সাইটে ভিজ্যুয়াল","নমুনা ল্যাব টেস্ট","সংরক্ষণ"],"mistakes":["শুধু দাম দেখা","সার্টিফিকেট না দেখা","ভুল স্টোরেজ"],"tips":["সিমেন্ট মাটি থেকে উঁচুতে","রড মরিচা প্রতিরোধে ঢেকে রাখুন"],"checklist":["স্পেক","সার্টিফিকেট","নমুনা","স্টোরেজ"]},
+          {"id":62,"en":"Sand & Aggregate Quality","bn":"বালি ও খোয়ার মান","phase":"১০. ম্যাটেরিয়াল","what":"কংক্রিটের জন্য সঠিক গ্রেডের বালি, খোয়া বা পাথর — সিল্ট, লবণ ও অমেধ্য মুক্ত।","why":"ভুল বালিতে শক্তি কম, ফাটল, রিইনফোর্সমেন্টে মরিচা।","steps":["ভিজ্যুয়াল চেক","সিভ অ্যানালাইসিস","সিল্ট ও ক্লে টেস্ট","লবণ পরীক্ষা","সোর্স ভেরিফিকেশন"],"mistakes":["সিল্ট বেশি বালি","অমেধ্য যুক্ত খোয়া","ভুল গ্রেডিং"],"tips":["সোর্স একই রাখুন","ব্যাচ নম্বর রাখুন"],"checklist":["ভিজ্যুয়াল","সিভ","সিল্ট","লবণ"]},
+          {"id":63,"en":"Admixtures & Water","bn":"অ্যাডমিক্সচার ও পানি","phase":"১০. ম্যাটেরিয়াল","what":"কংক্রিটে রিটাডার, অ্যাক্সিলারেটর, প্লাস্টিসাইজার, ওয়াটারপ্রুফিং অ্যাডমিক্সচার; এবং মিশ্রণে ব্যবহারযোগ্য পানি।","why":"ভুল অ্যাডমিক্সচারে কংক্রিট দেরিতে সেট বা দ্রুত সেট, পানিতে লবণ থাকলে শক্তি কম।","steps":["প্রয়োজন নির্ধারণ","ব্র্যান্ড ও ডোজ","ট্রায়াল মিক্স","পানির ল্যাব টেস্ট","ডোজ রেকর্ড"],"mistakes":["বেশি ডোজ","ম্যানুফ্যাকচারার নির্দেশনা না পড়া","পানি টেস্ট না করা"],"tips":["ট্রায়াল মিক্স ছাড়া সাইটে নয়","পানি পরিষ্কার ও লবণমুক্ত"],"checklist":["প্রয়োজন","ডোজ","ট্রায়াল","পানি টেস্ট"]}
+          ]
+          EOF_JSON
+          echo "topics.json written."
+
+      - name: Validate topics.json
+        run: |
+          set -euo pipefail
+          python3 -c "import json;d=json.load(open('app/src/main/assets/topics.json'));print('topics:',len(d));ids=[t['id'] for t in d];assert len(ids)==len(set(ids)),'duplicate ids'"
+
+      - name: Build Android APKs
+        run: |
+          set -euo pipefail
+          gradle assembleDebug assembleRelease --no-daemon --stacktrace
+
+      - name: Package universal APKs
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "out/SiteBook-universal-debug-${GITHUB_SHA::7}.apk"
+          cp app/build/outputs/apk/release/app-release-unsigned.apk \
+             "out/SiteBook-universal-release-unsigned-${GITHUB_SHA::7}.apk"
+          ls -la out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SiteBook-android-${{ github.sha }}
+          path: out/*.apk
+          retention-days: 14
+          if-no-files-found: error
